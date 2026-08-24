@@ -34,4 +34,10 @@ The mod is client-only and has no gameplay-mod dependency. It is enabled by defa
 
 The optional MCP prepared-root launcher currently targets Windows background desktops. The NeoForge mod itself does not require the MCP.
 
+## Live Client Evidence
+
+![Live Minecraft client framebuffer captured through MineClient Bridge](https://raw.githubusercontent.com/Campione01/MineClient-Bridge/main/docs/assets/mineclient-bridge-live-client-smoke.png)
+
+This is a real 960x540 framebuffer captured during a mod-compatibility smoke test. The gameplay model belongs to a separate test mod; MineClient Bridge adds no in-game overlay.
+
 The project avatar is an original AI-assisted illustration and does not represent a separate in-game UI.
