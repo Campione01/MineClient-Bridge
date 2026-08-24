@@ -13,7 +13,10 @@ import { fileURLToPath } from "node:url";
 const SERVER_NAME = "mineclient-bridge";
 const SERVER_VERSION = "1.0.0";
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PREPARED_ROOT_PARENT = path.win32.join(os.tmpdir(), "mineclient-bridge-runs");
+const DEFAULT_PREPARED_ROOT_PARENT = path.win32.join(
+  fsSync.realpathSync.native(os.tmpdir()),
+  "mineclient-bridge-runs"
+);
 const PREPARED_ROOT_ADAPTER = Object.freeze({
   name: "isolated-prepared-root-v1",
   rootParent: configuredWindowsPath(

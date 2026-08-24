@@ -12,7 +12,10 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_FILE = path.join(HERE, "mineclient-bridge-mcp.mjs");
-const PREPARED_PARENT = path.win32.join(os.tmpdir(), "mineclient-bridge-self-test-runs");
+const PREPARED_PARENT = path.win32.join(
+  fsSync.realpathSync.native(os.tmpdir()),
+  "mineclient-bridge-self-test-runs"
+);
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64"
