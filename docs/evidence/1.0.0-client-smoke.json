@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "release": "1.0.0",
+  "minecraft": "1.21.1",
+  "neoforge": "21.1.219",
+  "artifact_sha256": "AD212D174E9970937B3AA456E9189BBC0F3589C57B30684734585CB6CC4BBED1",
+  "run_id": "mineclient-smoke-1787540651766",
+  "process_id": 36144,
+  "desktop_identity_verified": true,
+  "identity_verified": true,
+  "loopback_and_bearer_verified": true,
+  "in_world": true,
+  "frame_png_verified": true,
+  "frame_width": 960,
+  "frame_height": 540,
+  "capabilities_verified": true,
+  "state_query_verified": true,
+  "screen_query_verified": true,
+  "keymaps_returned": 46,
+  "look_input_verified": true,
+  "key_press_release_verified": "key.sneak",
+  "release_all_verified": true,
+  "held_mappings_after_release": 0,
+  "process_exited": true,
+  "desktop_removed": true,
+  "input_desktop_preserved": true,
+  "session_descriptor_removed": true,
+  "screenshot": {
+    "path": "docs/assets/mineclient-bridge-live-client-smoke.png",
+    "bytes": 108982,
+    "sha256": "10FDFAAED26DBA775C6980297A86AE2B51C4E2ED826F1EEFFD41FC77A8B6CD0A"
+  }
+}

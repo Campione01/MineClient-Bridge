@@ -1,0 +1,19 @@
+name: Feature request
+description: Propose a bounded observation or control capability
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the client workflow that cannot be completed with the current fixed endpoints.
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Proposed safety boundary
+      description: State the expected authentication, limits, client-thread ownership, and cleanup behavior.
+    validations:
+      required: true

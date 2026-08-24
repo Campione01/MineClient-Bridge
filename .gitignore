@@ -1,0 +1,11 @@
+.gradle/
+build/
+run/
+out/
+.idea/
+*.iml
+config/mineclient-bridge.json
+config/mineclient-bridge.token
+mcp/sessions/
+mcp/self-test-*/
+*.log

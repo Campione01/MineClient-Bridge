@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible MineClient Bridge problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include bearer tokens, private runtime paths, or account credentials.
+  - type: input
+    id: version
+    attributes:
+      label: MineClient Bridge version
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Minecraft, NeoForge, Java, and operating system
+      placeholder: Minecraft 1.21.1, NeoForge 21.1.x, Java 21, Windows 11
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options:
+        - NeoForge mod HTTP bridge
+        - MCP server
+        - Codex skill or documentation
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Include the endpoint or MCP tool, expected result, and actual result. Redact secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste only the smallest redacted excerpt needed to identify the first error.
+      render: text

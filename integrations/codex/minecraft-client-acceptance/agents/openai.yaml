@@ -1,0 +1,4 @@
+interface:
+  display_name: "Minecraft Client Acceptance"
+  short_description: "Operate isolated Minecraft clients through MineClient Bridge"
+  default_prompt: "Use MineClient Bridge to launch, observe, operate, and close the required isolated Minecraft client acceptance session."
