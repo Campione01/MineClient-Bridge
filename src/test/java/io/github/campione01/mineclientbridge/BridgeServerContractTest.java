@@ -31,8 +31,12 @@ class BridgeServerContractTest {
         assertTrue(source.contains("MAX_COMMAND_LENGTH = 256"));
         assertTrue(source.contains("command = command.substring(1).stripLeading()"));
         assertTrue(source.contains("command.length() > MAX_COMMAND_LENGTH"));
+        assertTrue(source.contains("ClientHooks.onMouseScroll"));
+        assertTrue(source.contains("KeyMapping.resetMapping()"));
+        assertTrue(source.contains("world_move_requires_look"));
         assertFalse(source.contains("command_submission_forbidden"));
         assertFalse(source.contains("control_arbitrary_commands"));
+        assertFalse(source.contains("mapping_unbound"));
         assertFalse(source.contains("createContext(\"/" + "chat\""));
     }
 

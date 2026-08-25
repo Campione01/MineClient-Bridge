@@ -57,6 +57,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.client.ClientHooks;
 
 public final class BridgeServer {
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
@@ -372,14 +373,24 @@ public final class BridgeServer {
         final String action;
         final double scrollY;
         try {
-            x = requiredBoundedCoordinate(body, "x");
-            y = requiredBoundedCoordinate(body, "y");
             action = requiredString(body, "action").trim().toLowerCase(Locale.ROOT);
             if (!action.equals("move") && !action.equals("down") && !action.equals("up")
                     && !action.equals("release") && !action.equals("click") && !action.equals("scroll")) {
                 throw new RequestException(400, "invalid_action",
                         "action must be move, down, up, release, click, or scroll");
             }
+            boolean hasX = body.has("x");
+            boolean hasY = body.has("y");
+            if (hasX != hasY) {
+                throw new RequestException(400, "incomplete_coordinates",
+                        "x and y must either both be present or both be absent");
+            }
+            if (action.equals("move") && !hasX) {
+                throw new RequestException(400, "missing_coordinates",
+                        "move requires x and y");
+            }
+            x = hasX ? requiredBoundedCoordinate(body, "x") : Double.NaN;
+            y = hasY ? requiredBoundedCoordinate(body, "y") : Double.NaN;
             button = optionalInteger(body, "button", 0);
             if (button < 0 || button > 7) {
                 throw new RequestException(400, "invalid_button", "button must be between 0 and 7");
@@ -975,17 +986,15 @@ public final class BridgeServer {
         if (selected == null) {
             return new EndpointResult(404, error("mapping_not_found", "No exact KeyMapping.getName() match"));
         }
-        if (action.equals("click") && selected.isUnbound()) {
-            return new EndpointResult(409, error("mapping_unbound", "Cannot click an unbound mapping"));
-        }
-
         switch (action) {
             case "down" -> selected.setDown(true);
             case "up" -> selected.setDown(false);
             case "click" -> {
-                selected.setDown(true);
-                KeyMapping.click(selected.getKey());
-                selected.setDown(false);
+                if (!clickMappingExactly(mc, selected)) {
+                    return new EndpointResult(409, error(
+                            "no_temporary_mapping_key",
+                            "No unused keyboard key is available for an exact mapping click"));
+                }
             }
             default -> throw new IllegalArgumentException("Unsupported key action: " + action);
         }
@@ -996,6 +1005,43 @@ public final class BridgeServer {
         obj.addProperty("key", selected.saveString());
         obj.addProperty("down", selected.isDown());
         return new EndpointResult(200, obj);
+    }
+
+    private static boolean clickMappingExactly(Minecraft mc, KeyMapping selected) {
+        InputConstants.Key temporaryKey = findUnusedKeyboardKey(mc);
+        if (temporaryKey == null) {
+            return false;
+        }
+
+        InputConstants.Key originalKey = selected.getKey();
+        selected.setKey(temporaryKey);
+        KeyMapping.resetMapping();
+        try {
+            selected.setDown(true);
+            KeyMapping.click(temporaryKey);
+        } finally {
+            selected.setDown(false);
+            selected.setKey(originalKey);
+            KeyMapping.resetMapping();
+        }
+        return true;
+    }
+
+    private static InputConstants.Key findUnusedKeyboardKey(Minecraft mc) {
+        for (int keyCode = MAX_GLFW_KEY_CODE; keyCode >= 32; keyCode--) {
+            InputConstants.Key candidate = InputConstants.Type.KEYSYM.getOrCreate(keyCode);
+            boolean used = false;
+            for (KeyMapping mapping : mc.options.keyMappings) {
+                if (candidate.equals(mapping.getKey())) {
+                    used = true;
+                    break;
+                }
+            }
+            if (!used) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     private static EndpointResult applyRawKeyAction(String keyName, String action) {
@@ -1107,31 +1153,38 @@ public final class BridgeServer {
         Minecraft mc = Minecraft.getInstance();
         Screen currentScreen = mc.screen;
         if (currentScreen == null) {
-            return new EndpointResult(409, error("no_active_screen"));
+            return applyWorldMouseAction(mc, button, action, scrollY);
         }
 
-        currentScreen.mouseMoved(x, y);
+        double screenX = Double.isNaN(x)
+                ? mc.mouseHandler.xpos() * currentScreen.width / mc.getWindow().getScreenWidth()
+                : x;
+        double screenY = Double.isNaN(y)
+                ? mc.mouseHandler.ypos() * currentScreen.height / mc.getWindow().getScreenHeight()
+                : y;
+        currentScreen.mouseMoved(screenX, screenY);
         boolean handled = false;
         boolean pressed = false;
         boolean released = false;
         switch (action) {
             case "move" -> handled = true;
-            case "down" -> handled = pressed = currentScreen.mouseClicked(x, y, button);
-            case "up", "release" -> handled = released = currentScreen.mouseReleased(x, y, button);
+            case "down" -> handled = pressed = currentScreen.mouseClicked(screenX, screenY, button);
+            case "up", "release" -> handled = released = currentScreen.mouseReleased(screenX, screenY, button);
             case "click" -> {
-                pressed = currentScreen.mouseClicked(x, y, button);
-                released = currentScreen.mouseReleased(x, y, button);
+                pressed = currentScreen.mouseClicked(screenX, screenY, button);
+                released = currentScreen.mouseReleased(screenX, screenY, button);
                 handled = pressed || released;
             }
-            case "scroll" -> handled = currentScreen.mouseScrolled(x, y, 0.0, scrollY);
+            case "scroll" -> handled = currentScreen.mouseScrolled(screenX, screenY, 0.0, scrollY);
             default -> throw new IllegalArgumentException("Unsupported mouse action: " + action);
         }
 
         JsonObject obj = ok();
         obj.addProperty("screen", currentScreen.getClass().getName());
         obj.addProperty("action", action);
-        obj.addProperty("x", x);
-        obj.addProperty("y", y);
+        obj.addProperty("scope", "screen");
+        obj.addProperty("x", screenX);
+        obj.addProperty("y", screenY);
         obj.addProperty("button", button);
         obj.addProperty("scroll_y", scrollY);
         obj.addProperty("handled", handled);
@@ -1139,6 +1192,51 @@ public final class BridgeServer {
             obj.addProperty("pressed", pressed);
             obj.addProperty("released", released);
         }
+        return new EndpointResult(200, obj);
+    }
+
+    private static EndpointResult applyWorldMouseAction(
+            Minecraft mc,
+            int button,
+            String action,
+            double scrollY) {
+        if (mc.player == null || mc.level == null) {
+            return new EndpointResult(409, error("not_in_world"));
+        }
+        if (action.equals("move")) {
+            return new EndpointResult(409, error(
+                    "world_move_requires_look",
+                    "Use /control/look for world camera movement"));
+        }
+
+        boolean handled;
+        if (action.equals("scroll")) {
+            handled = ClientHooks.onMouseScroll(mc.mouseHandler, 0.0, scrollY);
+            if (!handled) {
+                mc.player.getInventory().swapPaint(scrollY);
+                handled = true;
+            }
+        } else {
+            InputConstants.Key mouseKey = InputConstants.Type.MOUSE.getOrCreate(button);
+            switch (action) {
+                case "down" -> KeyMapping.set(mouseKey, true);
+                case "up", "release" -> KeyMapping.set(mouseKey, false);
+                case "click" -> {
+                    KeyMapping.set(mouseKey, true);
+                    KeyMapping.click(mouseKey);
+                    KeyMapping.set(mouseKey, false);
+                }
+                default -> throw new IllegalArgumentException("Unsupported mouse action: " + action);
+            }
+            handled = true;
+        }
+
+        JsonObject obj = ok();
+        obj.addProperty("scope", "world");
+        obj.addProperty("action", action);
+        obj.addProperty("button", button);
+        obj.addProperty("scroll_y", scrollY);
+        obj.addProperty("handled", handled);
         return new EndpointResult(200, obj);
     }
 

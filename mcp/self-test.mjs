@@ -92,10 +92,10 @@ async function runSelfTest() {
     const initialized = await client.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "mineclient-bridge-self-test", version: "1.1.0" }
+      clientInfo: { name: "mineclient-bridge-self-test", version: "1.1.1" }
     });
     assert.equal(initialized.result.serverInfo.name, "mineclient-bridge");
-    assert.equal(initialized.result.serverInfo.version, "1.1.0");
+    assert.equal(initialized.result.serverInfo.version, "1.1.1");
 
     const listed = await client.request("tools/list", {});
     const toolNames = listed.result.tools.map((tool) => tool.name);
@@ -323,6 +323,12 @@ async function runSelfTest() {
     allToolResponses.push(await client.callTool("minecraft_client_input", {
       run_id: launchRun,
       kind: "mouse",
+      button: 0,
+      action: "press"
+    }));
+    allToolResponses.push(await client.callTool("minecraft_client_input", {
+      run_id: launchRun,
+      kind: "mouse",
       x: 120,
       y: 80,
       button: 1,
@@ -331,8 +337,6 @@ async function runSelfTest() {
     allToolResponses.push(await client.callTool("minecraft_client_input", {
       run_id: launchRun,
       kind: "mouse",
-      x: 120,
-      y: 80,
       scrollY: -1,
       action: "scroll"
     }));
@@ -410,6 +414,12 @@ async function runSelfTest() {
     );
     assert.deepEqual(
       fixtureRequests.find(
+        (entry) => entry.path === "/control/mouse" && entry.body?.action === "down"
+      ).body,
+      { action: "down", button: 0 }
+    );
+    assert.deepEqual(
+      fixtureRequests.find(
         (entry) => entry.path === "/control/mouse" && entry.body?.action === "click"
       ).body,
       { x: 120, y: 80, action: "click", button: 1 }
@@ -418,7 +428,7 @@ async function runSelfTest() {
       fixtureRequests.find(
         (entry) => entry.path === "/control/mouse" && entry.body?.action === "scroll"
       ).body,
-      { x: 120, y: 80, action: "scroll", scrollY: -1 }
+      { action: "scroll", scrollY: -1 }
     );
     assert.deepEqual(
       fixtureRequests

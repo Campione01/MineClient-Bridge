@@ -7,7 +7,7 @@ MineClient Bridge is a client-side NeoForge 1.21.1 mod that gives authorized loc
 - Captures the current presented framebuffer as PNG.
 - Reads bounded client, player, world, inventory, effect, crosshair, entity, GUI-widget, and container-slot state.
 - Discovers and operates named Minecraft key mappings.
-- Supports bounded view, GUI mouse, active-screen text, and internal raw-key input.
+- Supports bounded view, in-world mouse buttons and scroll, GUI mouse, active-screen text, and internal raw-key input.
 - Submits authorized Minecraft commands through the normal client command path.
 - Releases held input and can request a graceful client shutdown.
 - Includes an optional MCP server and Codex acceptance skill in the source repository.

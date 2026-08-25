@@ -11,7 +11,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const SERVER_NAME = "mineclient-bridge";
-const SERVER_VERSION = "1.1.0";
+const SERVER_VERSION = "1.1.1";
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PREPARED_ROOT_PARENT = path.win32.join(
   fsSync.realpathSync.native(os.tmpdir()),
@@ -185,7 +185,7 @@ const tools = [
             action: { enum: ["move", "press", "release", "click", "scroll"] },
             scrollY: { type: "number" }
           },
-          required: ["run_id", "kind", "x", "y", "action"],
+          required: ["run_id", "kind", "action"],
           additionalProperties: false
         },
         {
@@ -720,7 +720,7 @@ function parseInput(args) {
     case "mouse": {
       const allowed = ["run_id", "kind", "x", "y", "button", "action", "scrollY"];
       assertAllowedKeys(args, allowed);
-      for (const required of ["run_id", "kind", "x", "y", "action"]) {
+      for (const required of ["run_id", "kind", "action"]) {
         if (!Object.hasOwn(args, required)) {
           throw new Error(`mouse input is missing ${required}`);
         }
@@ -729,11 +729,20 @@ function parseInput(args) {
       if (!["move", "press", "release", "click", "scroll"].includes(action)) {
         throw new Error("mouse action must be move, press, release, click, or scroll");
       }
-      const body = {
-        x: validateFiniteNumber(args.x, "x"),
-        y: validateFiniteNumber(args.y, "y"),
-        action
-      };
+      const hasX = Object.hasOwn(args, "x");
+      const hasY = Object.hasOwn(args, "y");
+      if (hasX !== hasY) {
+        throw new Error("mouse x and y must either both be present or both be absent");
+      }
+      if (action === "move" && !hasX) {
+        throw new Error("mouse move requires x and y");
+      }
+      const wireAction = { press: "down", release: "up" }[action] ?? action;
+      const body = { action: wireAction };
+      if (hasX) {
+        body.x = validateFiniteNumber(args.x, "x");
+        body.y = validateFiniteNumber(args.y, "y");
+      }
       if (["press", "release", "click"].includes(action)) {
         body.button = validateMouseButton(args.button);
         if (Object.hasOwn(args, "scrollY")) {
