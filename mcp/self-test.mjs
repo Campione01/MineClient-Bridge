@@ -92,9 +92,10 @@ async function runSelfTest() {
     const initialized = await client.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "mineclient-bridge-self-test", version: "1.0.0" }
+      clientInfo: { name: "mineclient-bridge-self-test", version: "1.1.0" }
     });
     assert.equal(initialized.result.serverInfo.name, "mineclient-bridge");
+    assert.equal(initialized.result.serverInfo.version, "1.1.0");
 
     const listed = await client.request("tools/list", {});
     const toolNames = listed.result.tools.map((tool) => tool.name);
@@ -107,6 +108,23 @@ async function runSelfTest() {
       "minecraft_client_input",
       "minecraft_client_close"
     ]);
+    const inputTool = listed.result.tools.find((tool) => tool.name === "minecraft_client_input");
+    const inputKinds = inputTool.inputSchema.oneOf
+      .map((schema) => schema.properties.kind.const)
+      .sort();
+    assert.deepEqual(inputKinds, [
+      "command",
+      "key",
+      "look",
+      "mouse",
+      "raw_key",
+      "release_all",
+      "text"
+    ]);
+    const commandSchema = inputTool.inputSchema.oneOf.find(
+      (schema) => schema.properties.kind.const === "command"
+    );
+    assert.equal(commandSchema.properties.command.maxLength, 512);
 
     const commonReject = {
       run_id: `mineclient-reject-${suffix}`,
@@ -283,6 +301,18 @@ async function runSelfTest() {
         action
       }));
     }
+    for (const [key, action] of [
+      ["enter", "tap"],
+      ["key.keyboard.escape", "press"],
+      ["f1", "release"]
+    ]) {
+      allToolResponses.push(await client.callTool("minecraft_client_input", {
+        run_id: launchRun,
+        kind: "raw_key",
+        key,
+        action
+      }));
+    }
     allToolResponses.push(await client.callTool("minecraft_client_input", {
       run_id: launchRun,
       kind: "look",
@@ -314,6 +344,38 @@ async function runSelfTest() {
     }));
     allToolResponses.push(await client.callTool("minecraft_client_input", {
       run_id: launchRun,
+      kind: "text",
+      text: "/say submitted through chat",
+      submit: true
+    }));
+    allToolResponses.push(await client.callTool("minecraft_client_input", {
+      run_id: launchRun,
+      kind: "command",
+      command: "/say submitted directly"
+    }));
+    const maximumCommand = "x".repeat(256);
+    allToolResponses.push(await client.callTool("minecraft_client_input", {
+      run_id: launchRun,
+      kind: "command",
+      command: maximumCommand
+    }));
+    allToolResponses.push(await client.callTool("minecraft_client_input", {
+      run_id: launchRun,
+      kind: "command",
+      command: `/${maximumCommand}`
+    }));
+    await expectToolError(client, "minecraft_client_input", {
+      run_id: launchRun,
+      kind: "command",
+      command: ""
+    }, /command/);
+    await expectToolError(client, "minecraft_client_input", {
+      run_id: launchRun,
+      kind: "command",
+      command: `/${"x".repeat(257)}`
+    }, /1 to 256/);
+    allToolResponses.push(await client.callTool("minecraft_client_input", {
+      run_id: launchRun,
       kind: "release_all"
     }));
 
@@ -333,6 +395,16 @@ async function runSelfTest() {
       { mapping: "key.jump", action: "click" }
     ]);
     assert.deepEqual(
+      fixtureRequests
+        .filter((entry) => entry.path === "/control/raw-key")
+        .map((entry) => entry.body),
+      [
+        { key: "enter", action: "click" },
+        { key: "key.keyboard.escape", action: "down" },
+        { key: "f1", action: "up" }
+      ]
+    );
+    assert.deepEqual(
       fixtureRequests.find((entry) => entry.path === "/control/look").body,
       { yaw: 12.5, pitch: -4, relative: true }
     );
@@ -349,9 +421,32 @@ async function runSelfTest() {
       { x: 120, y: 80, action: "scroll", scrollY: -1 }
     );
     assert.deepEqual(
-      fixtureRequests.find((entry) => entry.path === "/control/text").body,
-      { text: "MineClient Bridge", submit: true }
+      fixtureRequests
+        .filter((entry) => entry.path === "/control/text")
+        .map((entry) => entry.body),
+      [
+        { text: "MineClient Bridge", submit: true },
+        { text: "/say submitted through chat", submit: true }
+      ]
     );
+    assert.deepEqual(
+      fixtureRequests
+        .filter((entry) => entry.path === "/control/command")
+        .map((entry) => entry.body),
+      [
+        { command: "/say submitted directly" },
+        { command: maximumCommand },
+        { command: `/${maximumCommand}` }
+      ]
+    );
+    const heldRawKeyIndex = fixtureRequests.findIndex(
+      (entry) => entry.path === "/control/raw-key" && entry.body?.action === "down"
+    );
+    const releaseAllIndex = fixtureRequests.findIndex(
+      (entry) => entry.path === "/control/release-all"
+    );
+    assert(heldRawKeyIndex >= 0);
+    assert(releaseAllIndex > heldRawKeyIndex);
 
     const launchedClose = await client.callTool(
       "minecraft_client_close",
@@ -402,7 +497,7 @@ async function runSelfTest() {
     assert.equal(await processIsAlive(fixturePid), false);
     assert.equal(clientStderrWasEmpty(), true);
     process.stdout.write(
-      `SELF_TEST_OK tools=7 launch=ready register=exact frame=png query=4 input=8 close=pid-exit exit=release secrets=redacted\n`
+      `SELF_TEST_OK tools=7 launch=ready register=exact frame=png query=4 input=15 close=pid-exit exit=release secrets=redacted\n`
     );
 
     function clientStderrWasEmpty() {
@@ -560,9 +655,11 @@ async function createBridgeServer(options) {
         request.method === "POST" &&
         [
           "/control/key",
+          "/control/raw-key",
           "/control/look",
           "/control/mouse",
           "/control/text",
+          "/control/command",
           "/control/release-all"
         ].includes(url.pathname)
       ) {

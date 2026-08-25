@@ -13,7 +13,7 @@ Use the `mineclient_bridge` MCP as the interactive operator surface. Do not driv
 2. Require one exact tuple before observing or changing the client: `run_id`, Java PID, native desktop, runtime root, evidence root, and loopback bridge identity.
 3. Use `minecraft_client_status`, then `minecraft_client_frame`. Inspect the returned frame; a nonempty PNG is evidence transport, not a pass conclusion.
 4. Use `minecraft_client_query` for capabilities, world/player state, GUI widgets, inventory slots, and configured key mappings.
-5. Use `minecraft_client_input` for mapped keys, camera movement, GUI pointer input, text, and release-all. Prefer explicit press/release for hold timing.
+5. Use `minecraft_client_input` for mapped keys, internal raw keys, camera movement, GUI pointer input, text, Minecraft commands, and release-all. Prefer explicit press/release for hold timing.
 6. Observe again after every meaningful transition. Record visible behavior separately from server-owned facts.
 7. Always release held input after an error. Finish with `minecraft_client_close`, then verify that the exact PID exits and the owned desktop is gone.
 

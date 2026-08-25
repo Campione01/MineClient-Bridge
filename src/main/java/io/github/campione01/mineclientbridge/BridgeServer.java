@@ -6,6 +6,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.NativeImage;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -19,6 +20,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.PriorityQueue;
 import java.util.concurrent.Callable;
@@ -66,6 +68,8 @@ public final class BridgeServer {
     private static final int MAX_JSON_BYTES = 256 * 1024;
     private static final int MAX_FRAME_BYTES = 32 * 1024 * 1024;
     private static final int MAX_TEXT_LENGTH = 512;
+    private static final int MAX_COMMAND_LENGTH = 256;
+    private static final int MAX_GLFW_KEY_CODE = 348;
     private static final int MAX_KEYMAPS = 256;
     private static final int MAX_STATUS_EFFECTS = 64;
     private static final int MAX_NEARBY_ENTITIES = 64;
@@ -77,6 +81,7 @@ public final class BridgeServer {
     private static final long MINECRAFT_TIMEOUT_SECONDS = 5;
     private static final long FRAME_TIMEOUT_SECONDS = 15;
     private static final AtomicInteger WORKER_SEQUENCE = new AtomicInteger();
+    private static final LinkedHashSet<InputConstants.Key> HELD_RAW_KEYS = new LinkedHashSet<>();
     private static volatile HttpServer server;
     private static volatile ExecutorService serverExecutor;
     private static volatile BridgeConfig config;
@@ -111,9 +116,11 @@ public final class BridgeServer {
             createdServer.createContext("/control/state", BridgeServer::handleControlState);
             createdServer.createContext("/control/screen", BridgeServer::handleControlScreen);
             createdServer.createContext("/control/key", BridgeServer::handleControlKey);
+            createdServer.createContext("/control/raw-key", BridgeServer::handleControlRawKey);
             createdServer.createContext("/control/look", BridgeServer::handleControlLook);
             createdServer.createContext("/control/mouse", BridgeServer::handleControlMouse);
             createdServer.createContext("/control/text", BridgeServer::handleControlText);
+            createdServer.createContext("/control/command", BridgeServer::handleControlCommand);
             createdServer.createContext("/control/release-all", BridgeServer::handleControlReleaseAll);
             createdServer.createContext("/control/close", BridgeServer::handleControlClose);
             createdServer.createContext("/", BridgeServer::handleRoot);
@@ -293,6 +300,38 @@ public final class BridgeServer {
         }
     }
 
+    private static void handleControlRawKey(HttpExchange exchange) throws IOException {
+        if (!requireControlAccess(exchange, "/control/raw-key", "POST")) return;
+
+        JsonObject body = readJsonObjectOrRespond(exchange, false);
+        if (body == null) return;
+
+        final String key;
+        final String action;
+        try {
+            key = requiredString(body, "key");
+            action = requiredString(body, "action").trim().toLowerCase(Locale.ROOT);
+            if (key.isBlank()) {
+                throw new RequestException(400, "invalid_key", "key must not be blank");
+            }
+            if (!action.equals("down") && !action.equals("up") && !action.equals("click")) {
+                throw new RequestException(400, "invalid_action", "action must be down, up, or click");
+            }
+        } catch (RequestException e) {
+            respondRequestFailure(exchange, e);
+            return;
+        }
+
+        try {
+            EndpointResult result = callOnMinecraftThread(
+                    () -> applyRawKeyAction(key, action),
+                    MINECRAFT_TIMEOUT_SECONDS);
+            respondJson(exchange, result.status(), result.body());
+        } catch (Exception e) {
+            respondMinecraftFailure(exchange, "raw_key_action_failed", e);
+        }
+    }
+
     private static void handleControlLook(HttpExchange exchange) throws IOException {
         if (!requireControlAccess(exchange, "/control/look", "POST")) return;
 
@@ -373,10 +412,6 @@ public final class BridgeServer {
             text = requiredString(body, "text");
             submit = optionalBoolean(body, "submit", false);
             validateScreenText(text);
-            if (submit && text.stripLeading().startsWith("/")) {
-                throw new RequestException(403, "command_submission_forbidden",
-                        "The text endpoint does not submit commands");
-            }
         } catch (RequestException e) {
             respondRequestFailure(exchange, e);
             return;
@@ -392,15 +427,40 @@ public final class BridgeServer {
         }
     }
 
+    private static void handleControlCommand(HttpExchange exchange) throws IOException {
+        if (!requireControlAccess(exchange, "/control/command", "POST")) return;
+
+        JsonObject body = readJsonObjectOrRespond(exchange, false);
+        if (body == null) return;
+
+        final String command;
+        try {
+            command = normalizeCommand(requiredString(body, "command"));
+        } catch (RequestException e) {
+            respondRequestFailure(exchange, e);
+            return;
+        }
+
+        try {
+            EndpointResult result = callOnMinecraftThread(
+                    () -> applyCommand(command),
+                    MINECRAFT_TIMEOUT_SECONDS);
+            respondJson(exchange, result.status(), result.body());
+        } catch (Exception e) {
+            respondMinecraftFailure(exchange, "command_submission_failed", e);
+        }
+    }
+
     private static void handleControlReleaseAll(HttpExchange exchange) throws IOException {
         if (!requireControlAccess(exchange, "/control/release-all", "POST")) return;
         if (readJsonObjectOrRespond(exchange, true) == null) return;
 
         try {
             JsonObject result = callOnMinecraftThread(() -> {
-                KeyMapping.releaseAll();
+                int rawKeysReleased = releaseAllInputs();
                 JsonObject obj = ok();
                 obj.addProperty("released", true);
+                obj.addProperty("raw_keys_released", rawKeysReleased);
                 return obj;
             }, MINECRAFT_TIMEOUT_SECONDS);
             respondJson(exchange, 200, result);
@@ -415,10 +475,11 @@ public final class BridgeServer {
 
         try {
             JsonObject result = callOnMinecraftThread(() -> {
-                KeyMapping.releaseAll();
+                int rawKeysReleased = releaseAllInputs();
                 Minecraft.getInstance().stop();
                 JsonObject obj = ok();
                 obj.addProperty("released", true);
+                obj.addProperty("raw_keys_released", rawKeysReleased);
                 obj.addProperty("closing", true);
                 return obj;
             }, MINECRAFT_TIMEOUT_SECONDS);
@@ -438,9 +499,11 @@ public final class BridgeServer {
         addOperation(operations, "GET", "/control/state", "client_state_snapshot");
         addOperation(operations, "GET", "/control/screen", "screen_snapshot");
         addOperation(operations, "POST", "/control/key", "keymap_input");
+        addOperation(operations, "POST", "/control/raw-key", "internal_keyboard_input");
         addOperation(operations, "POST", "/control/look", "player_view");
         addOperation(operations, "POST", "/control/mouse", "screen_mouse_input");
         addOperation(operations, "POST", "/control/text", "focused_screen_text");
+        addOperation(operations, "POST", "/control/command", "minecraft_command");
         addOperation(operations, "POST", "/control/release-all", "release_keymaps");
         addOperation(operations, "POST", "/control/close", "graceful_client_stop");
         obj.add("operations", operations);
@@ -457,19 +520,20 @@ public final class BridgeServer {
         limits.addProperty("screen_children_max", MAX_SCREEN_CHILDREN);
         limits.addProperty("container_slots_max", MAX_CONTAINER_SLOTS);
         limits.addProperty("text_characters_max", MAX_TEXT_LENGTH);
+        limits.addProperty("command_characters_max", MAX_COMMAND_LENGTH);
         obj.add("limits", limits);
 
         JsonObject safety = new JsonObject();
         safety.addProperty("loopback_only", true);
         safety.addProperty("bearer_required", true);
-        safety.addProperty("control_arbitrary_commands", false);
+        safety.addProperty("authenticated_minecraft_commands", true);
+        safety.addProperty("internal_keyboard_events", true);
         safety.addProperty("arbitrary_scripts", false);
         safety.addProperty("direct_file_api", false);
         safety.addProperty("direct_outbound_network_api", false);
         safety.addProperty("direct_world_mutation_api", false);
         safety.addProperty("input_can_trigger_gameplay_and_gui_actions", true);
         safety.addProperty("os_input", false);
-        safety.addProperty("legacy_chat_compatibility", false);
         obj.add("safety", safety);
         return obj;
     }
@@ -934,6 +998,77 @@ public final class BridgeServer {
         return new EndpointResult(200, obj);
     }
 
+    private static EndpointResult applyRawKeyAction(String keyName, String action) {
+        final InputConstants.Key key;
+        try {
+            key = resolveKeyboardKey(keyName);
+        } catch (IllegalArgumentException e) {
+            return new EndpointResult(400, error("invalid_key", e.getMessage()));
+        }
+
+        Minecraft mc = Minecraft.getInstance();
+        if (!mc.isSameThread()) {
+            throw new IllegalStateException("Raw key input must run on the Minecraft thread");
+        }
+        long window = mc.getWindow().getWindow();
+        boolean wasDown = HELD_RAW_KEYS.contains(key);
+        int events = 0;
+        switch (action) {
+            case "down" -> {
+                if (!wasDown) {
+                    HELD_RAW_KEYS.add(key);
+                    mc.keyboardHandler.keyPress(window, key.getValue(), -1, InputConstants.PRESS, 0);
+                    events = 1;
+                }
+            }
+            case "up" -> {
+                if (wasDown) {
+                    mc.keyboardHandler.keyPress(window, key.getValue(), -1, InputConstants.RELEASE, 0);
+                    HELD_RAW_KEYS.remove(key);
+                    events = 1;
+                }
+            }
+            case "click" -> {
+                if (!wasDown) {
+                    HELD_RAW_KEYS.add(key);
+                    mc.keyboardHandler.keyPress(window, key.getValue(), -1, InputConstants.PRESS, 0);
+                    events++;
+                }
+                mc.keyboardHandler.keyPress(window, key.getValue(), -1, InputConstants.RELEASE, 0);
+                HELD_RAW_KEYS.remove(key);
+                events++;
+            }
+            default -> throw new IllegalArgumentException("Unsupported raw key action: " + action);
+        }
+
+        JsonObject obj = ok();
+        obj.addProperty("key", key.getName());
+        obj.addProperty("key_code", key.getValue());
+        obj.addProperty("action", action);
+        obj.addProperty("was_down", wasDown);
+        obj.addProperty("down", HELD_RAW_KEYS.contains(key));
+        obj.addProperty("events", events);
+        return new EndpointResult(200, obj);
+    }
+
+    private static InputConstants.Key resolveKeyboardKey(String input) {
+        String keyName = input.trim().toLowerCase(Locale.ROOT);
+        if (!keyName.startsWith("key.keyboard.")) {
+            keyName = "key.keyboard." + keyName
+                    .replace('_', '.')
+                    .replace('-', '.')
+                    .replace(' ', '.');
+        }
+
+        InputConstants.Key key = InputConstants.getKey(keyName);
+        if (key.getType() != InputConstants.Type.KEYSYM
+                || key.getValue() < 0
+                || key.getValue() > MAX_GLFW_KEY_CODE) {
+            throw new IllegalArgumentException("key must identify a valid GLFW keyboard key");
+        }
+        return key;
+    }
+
     private static EndpointResult applyLook(double yawInput, double pitchInput, boolean relative) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) {
@@ -1050,6 +1185,18 @@ public final class BridgeServer {
         obj.addProperty("handled_characters", handledCharacters);
         obj.addProperty("handled", handledCharacters > 0);
         obj.addProperty("submitted", false);
+        return new EndpointResult(200, obj);
+    }
+
+    private static EndpointResult applyCommand(String command) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.getConnection() == null) {
+            return new EndpointResult(409, error("not_in_world"));
+        }
+
+        mc.getConnection().sendCommand(command);
+        JsonObject obj = ok();
+        obj.addProperty("submitted", true);
         return new EndpointResult(200, obj);
     }
 
@@ -1363,6 +1510,29 @@ public final class BridgeServer {
         }
     }
 
+    private static String normalizeCommand(String input) throws RequestException {
+        String command = input.trim();
+        if (command.startsWith("/")) {
+            command = command.substring(1).stripLeading();
+        }
+        if (command.isEmpty()) {
+            throw new RequestException(400, "empty_command", "command must not be empty");
+        }
+        if (command.length() > MAX_COMMAND_LENGTH) {
+            throw new RequestException(400, "invalid_command",
+                    "command exceeds " + MAX_COMMAND_LENGTH + " characters");
+        }
+        for (int offset = 0; offset < command.length();) {
+            int codePoint = command.codePointAt(offset);
+            if (Character.isISOControl(codePoint)) {
+                throw new RequestException(400, "unsupported_character",
+                        "Control characters are not accepted by the command endpoint");
+            }
+            offset += Character.charCount(codePoint);
+        }
+        return command;
+    }
+
     private static String runId() {
         String value = identityValue(
                 "mineclientBridge.runId",
@@ -1403,16 +1573,48 @@ public final class BridgeServer {
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc.isSameThread()) {
-                KeyMapping.releaseAll();
+                releaseAllInputs();
                 return;
             }
             callOnMinecraftThread(() -> {
-                KeyMapping.releaseAll();
+                releaseAllInputs();
                 return null;
             }, MINECRAFT_TIMEOUT_SECONDS);
         } catch (Exception e) {
-            BridgeLog.LOGGER.warn("Failed to release held key mappings while stopping bridge");
+            BridgeLog.LOGGER.warn("Failed to release held input while stopping bridge", e);
         }
+    }
+
+    private static int releaseAllInputs() {
+        Minecraft mc = Minecraft.getInstance();
+        if (!mc.isSameThread()) {
+            throw new IllegalStateException("Input cleanup must run on the Minecraft thread");
+        }
+
+        ArrayList<InputConstants.Key> rawKeys = new ArrayList<>(HELD_RAW_KEYS);
+        RuntimeException failure = null;
+        for (InputConstants.Key key : rawKeys) {
+            try {
+                mc.keyboardHandler.keyPress(
+                        mc.getWindow().getWindow(),
+                        key.getValue(),
+                        -1,
+                        InputConstants.RELEASE,
+                        0);
+                HELD_RAW_KEYS.remove(key);
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        KeyMapping.releaseAll();
+        if (failure != null) {
+            throw failure;
+        }
+        return rawKeys.size();
     }
 
     private record EntityDistance(Entity entity, double distance) {

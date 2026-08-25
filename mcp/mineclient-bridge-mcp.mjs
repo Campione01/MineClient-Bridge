@@ -11,7 +11,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const SERVER_NAME = "mineclient-bridge";
-const SERVER_VERSION = "1.0.0";
+const SERVER_VERSION = "1.1.0";
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PREPARED_ROOT_PARENT = path.win32.join(
   fsSync.realpathSync.native(os.tmpdir()),
@@ -133,7 +133,7 @@ const tools = [
   },
   {
     name: "minecraft_client_input",
-    description: "Send one bounded key, look, mouse, text, or release-all action to one registered Minecraft client.",
+    description: "Send one bounded keymap, raw keyboard, look, mouse, text, command, or release-all action to one registered Minecraft client.",
     inputSchema: {
       oneOf: [
         {
@@ -145,6 +145,21 @@ const tools = [
             action: { enum: ["press", "release", "tap"] }
           },
           required: ["run_id", "kind", "mapping", "action"],
+          additionalProperties: false
+        },
+        {
+          type: "object",
+          properties: {
+            run_id: { type: "string" },
+            kind: { const: "raw_key" },
+            key: {
+              type: "string",
+              maxLength: 128,
+              description: "Minecraft key name or short alias, for example key.keyboard.enter, escape, or f1."
+            },
+            action: { enum: ["press", "release", "tap"] }
+          },
+          required: ["run_id", "kind", "key", "action"],
           additionalProperties: false
         },
         {
@@ -191,6 +206,20 @@ const tools = [
             submit: { type: "boolean" }
           },
           required: ["run_id", "kind", "text", "submit"],
+          additionalProperties: false
+        },
+        {
+          type: "object",
+          properties: {
+            run_id: { type: "string" },
+            kind: { const: "command" },
+            command: {
+              type: "string",
+              maxLength: 512,
+              description: "Minecraft command with or without a leading slash."
+            }
+          },
+          required: ["run_id", "kind", "command"],
           additionalProperties: false
         }
       ]
@@ -639,7 +668,7 @@ function parseRunIdOnly(args) {
 
 function parseInput(args) {
   if (typeof args.kind !== "string") {
-    throw new Error("kind must be one of key, look, mouse, text, release_all");
+    throw new Error("kind must be one of key, raw_key, look, mouse, text, command, release_all");
   }
   const runId = validateRunId(args.run_id);
 
@@ -657,6 +686,21 @@ function parseInput(args) {
         kind: "key",
         endpoint: "/control/key",
         body: { mapping, action: wireAction }
+      };
+    }
+    case "raw_key": {
+      assertExactKeys(args, ["run_id", "kind", "key", "action"]);
+      const key = validateBoundedString(args.key, "key", 128);
+      const actionMap = { press: "down", release: "up", tap: "click" };
+      const wireAction = actionMap[args.action];
+      if (!wireAction) {
+        throw new Error("raw key action must be press, release, or tap");
+      }
+      return {
+        runId,
+        kind: "raw_key",
+        endpoint: "/control/raw-key",
+        body: { key, action: wireAction }
       };
     }
     case "look": {
@@ -719,8 +763,16 @@ function parseInput(args) {
         endpoint: "/control/text",
         body: { text: validateInputText(args.text, "text", true), submit: args.submit }
       };
+    case "command":
+      assertExactKeys(args, ["run_id", "kind", "command"]);
+      return {
+        runId,
+        kind: "command",
+        endpoint: "/control/command",
+        body: { command: validateCommandInput(args.command) }
+      };
     default:
-      throw new Error("kind must be one of key, look, mouse, text, release_all");
+      throw new Error("kind must be one of key, raw_key, look, mouse, text, command, release_all");
   }
 }
 
@@ -898,6 +950,25 @@ function validateInputText(value, label, allowEmpty) {
     /[\u0000-\u0008\u000a-\u001f\u007f]/.test(value)
   ) {
     throw new Error(`${label} must be bounded text without line breaks or control characters`);
+  }
+  return value;
+}
+
+function validateCommandInput(value) {
+  if (
+    typeof value !== "string" ||
+    value.length > 512 ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(value)
+  ) {
+    throw new Error("command must be bounded text without control characters");
+  }
+
+  let normalized = value.trim();
+  if (normalized.startsWith("/")) {
+    normalized = normalized.slice(1).trimStart();
+  }
+  if (normalized.length < 1 || normalized.length > 256) {
+    throw new Error("command must contain 1 to 256 characters after optional slash normalization");
   }
   return value;
 }

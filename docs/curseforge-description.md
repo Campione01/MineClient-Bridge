@@ -7,15 +7,16 @@ MineClient Bridge is a client-side NeoForge 1.21.1 mod that gives authorized loc
 - Captures the current presented framebuffer as PNG.
 - Reads bounded client, player, world, inventory, effect, crosshair, entity, GUI-widget, and container-slot state.
 - Discovers and operates named Minecraft key mappings.
-- Supports bounded view, GUI mouse, and active-screen text input.
+- Supports bounded view, GUI mouse, active-screen text, and internal raw-key input.
+- Submits authorized Minecraft commands through the normal client command path.
 - Releases held input and can request a graceful client shutdown.
 - Includes an optional MCP server and Codex acceptance skill in the source repository.
 
 ## Safety And Privacy
 
-The bridge binds to `127.0.0.1` and rejects non-loopback requests. Every control endpoint requires a generated 256-bit bearer token, stored separately from the normal JSON configuration and never logged. Requests and responses have fixed size limits, slash-prefixed command submission is blocked, and held keys are released during shutdown.
+The bridge binds to `127.0.0.1` and rejects non-loopback requests. Every control endpoint requires a generated 256-bit bearer token, stored separately from the normal JSON configuration and never logged. Requests, responses, text, commands, and raw-key names have fixed size limits, and held keys are released during shutdown.
 
-MineClient Bridge has no telemetry and does not send client data to an external service. It exposes no arbitrary shell, script, filesystem, or direct world-edit API. Authorized key, mouse, and GUI inputs can still cause normal in-game actions, so the token should be treated as a local password.
+MineClient Bridge has no telemetry and does not send client data to an external service. It exposes no shell, script, filesystem, outbound-network, operating-system input, or direct world-edit API. Authorized commands and client input can cause normal in-game actions, so the token should be treated as a local password.
 
 ## Installation
 

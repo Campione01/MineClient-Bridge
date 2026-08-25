@@ -38,6 +38,8 @@ PowerShell 7 (`pwsh.exe`) is recommended when a prepared launcher references non
 - `minecraft_client_input`
 - `minecraft_client_close`
 
+`minecraft_client_input` accepts these input kinds: `key`, `raw_key`, `look`, `mouse`, `text`, `command`, and `release_all`. Use `raw_key` with a Minecraft key name or short alias such as `key.keyboard.enter`, `escape`, or `f1`. Repeated raw-key presses and releases are idempotent. A tap completes an existing press or sends a new press/release pair, always ends released, and repeated taps remain independent. Session cleanup releases every tracked raw key. Use `command` with up to 256 command characters with or without a leading slash. Both paths use the authenticated in-client bridge and do not inject operating-system input.
+
 Launch roots are one-shot and must contain `final-preflight.json`, `launch.ps1`, and `launch/java-arguments.txt`. The launcher must preserve the MCP-provided `MINECLIENT_BRIDGE_*` environment variables when it starts Java. Every session is revalidated against its run ID, process ID, desktop, runtime root, evidence root, and authenticated bridge status.
 
 Production descriptors are stored outside the repository. They contain the session token and must remain in a private user-owned directory. The MCP never returns or logs the token.
@@ -48,4 +50,4 @@ Production descriptors are stored outside the repository. They contain the sessi
 node .\self-test.mjs
 ```
 
-The self-test covers all seven tools, launch and registration identity, PNG transport, bounded queries and inputs, release-before-close behavior, exact PID exit, and secret redaction.
+The self-test covers all seven tools, launch and registration identity, PNG transport, bounded queries and inputs including commands and raw keys, release-before-close behavior, exact PID exit, and secret redaction.

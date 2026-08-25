@@ -21,8 +21,9 @@ The mod itself has no gameplay-mod dependency. The optional prepared-root launch
 - Capture the presented framebuffer as PNG without writing a screenshot first.
 - Inspect configured key mappings and held state.
 - Inspect bounded player, world, inventory, effect, crosshair, weather, nearby-entity, GUI-widget, and container-slot state.
-- Press, release, or tap a named Minecraft `KeyMapping`.
+- Press, release, or tap a named Minecraft `KeyMapping`, or send an internal keyboard event for keys such as Enter, Escape, and F1.
 - Change player view, operate GUI pointer controls, and submit bounded text through the active screen.
+- Submit a Minecraft command directly without opening the chat screen.
 - Release all held mappings and request a graceful client shutdown.
 
 MineClient Bridge does not expose arbitrary shell commands, scripts, filesystem operations, or direct world-edit endpoints. Its input endpoints can still trigger normal gameplay and GUI actions, just as a player can.
@@ -34,7 +35,8 @@ MineClient Bridge does not expose arbitrary shell commands, scripts, filesystem 
 - A 256-bit token is generated with `SecureRandom`, stored in `config/mineclient-bridge.token`, restricted to the current owner where the platform supports it, and never logged.
 - `config/mineclient-bridge.json` contains only `enabled`, `host`, and `port`.
 - Request bodies, JSON responses, framebuffer PNGs, queries, GUI entries, and text input all have fixed upper bounds.
-- Text submission rejects slash-prefixed commands and control characters.
+- Text and command input reject control characters and enforce fixed length limits.
+- Authorized command input uses Minecraft's normal client command path; the connected server still decides command permissions.
 - Held mappings are released when the bridge or client stops.
 - The mod contains no telemetry and sends no data to an external service.
 
@@ -43,7 +45,7 @@ Any local program that receives the token can operate the exposed client actions
 ## Installation
 
 1. Install NeoForge for Minecraft 1.21.1.
-2. Place `mineclient-bridge-neoforge-1.21.1-1.0.0.jar` in the client's `mods` directory.
+2. Place `mineclient-bridge-neoforge-1.21.1-1.1.0.jar` in the client's `mods` directory.
 3. Start the client. The mod creates its config and token files on first launch.
 4. Connect an authorized loopback client to `http://127.0.0.1:38121` using the generated token.
 
@@ -51,9 +53,9 @@ The bridge is enabled by default. Set `"enabled": false` in `config/mineclient-b
 
 ## HTTP Endpoints
 
-`GET /control/status`, `GET /control/capabilities`, `GET /control/frame`, `GET /control/keymaps`, `GET /control/state`, `GET /control/screen`, `POST /control/key`, `POST /control/look`, `POST /control/mouse`, `POST /control/text`, `POST /control/release-all`, and `POST /control/close`.
+`GET /control/status`, `GET /control/capabilities`, `GET /control/frame`, `GET /control/keymaps`, `GET /control/state`, `GET /control/screen`, `POST /control/key`, `POST /control/raw-key`, `POST /control/look`, `POST /control/mouse`, `POST /control/text`, `POST /control/command`, `POST /control/release-all`, and `POST /control/close`.
 
-All Minecraft state reads and input changes are dispatched to the client main thread. The protocol intentionally has no legacy command or unrestricted chat endpoint.
+All Minecraft state reads and input changes are dispatched to the client main thread. `POST /control/command` accepts up to 256 command characters with or without a leading slash. `POST /control/text` keeps normal chat-screen behavior, so submitted slash-prefixed text is handled as a command by Minecraft. Raw keys are delivered through Minecraft's own `KeyboardHandler`; the bridge never injects operating-system input. Raw-key `down` and `up` are idempotent. A `click` on a held key completes that press; otherwise it sends a new press/release pair, so every click ends released and repeated clicks remain independent. Release-all, close, and bridge shutdown emit a release for every tracked raw key.
 
 ## MCP And Codex Integration
 
@@ -74,7 +76,7 @@ This is a real 960x540 framebuffer from the NeoForge 1.21.1 smoke session. The g
 node .\mcp\self-test.mjs
 ```
 
-The release artifact is `build/libs/mineclient-bridge-neoforge-1.21.1-1.0.0.jar`.
+The release artifact is `build/libs/mineclient-bridge-neoforge-1.21.1-1.1.0.jar`.
 
 ## License And References
 

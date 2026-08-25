@@ -7,7 +7,7 @@
 - `minecraft_client_status`: returns identity, world/screen state, dimensions, and held mappings.
 - `minecraft_client_frame`: returns the current presented frame as PNG.
 - `minecraft_client_query`: reads capabilities, player/world state, GUI/widget/slot state, or key mappings.
-- `minecraft_client_input`: sends one bounded key, look, mouse, text submission, or release-all action.
+- `minecraft_client_input`: sends one bounded keymap, raw key, look, mouse, text, command, or release-all action.
 - `minecraft_client_close`: releases input, requests graceful client shutdown, and removes the registered session.
 
 ## Required Identity
@@ -28,6 +28,8 @@ The bearer token is secret operational state. Never print it, commit it, place i
 ## Observation Loop
 
 Use `status -> frame -> input -> frame` instead of fixed sleeps. For held actions, issue `press`, observe the intended state, then issue `release` in a cleanup path. Use `release-all` after any error.
+
+Use `kind: command` for explicit Minecraft commands. The command may include or omit its leading slash. Use `kind: raw_key` for internal keyboard events that are not represented by a named `KeyMapping`, such as `enter`, `escape`, or `f1`. Raw keys go through the target client's `KeyboardHandler`, not operating-system input.
 
 MCP observation is request/response, not a continuous video stream. Motion-dependent tests may request successive frames or retain a short client-owned framebuffer recording.
 

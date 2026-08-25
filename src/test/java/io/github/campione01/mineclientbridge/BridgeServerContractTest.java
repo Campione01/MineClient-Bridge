@@ -15,12 +15,24 @@ class BridgeServerContractTest {
         String source = Files.readString(project.resolve(
                 "src/main/java/io/github/campione01/mineclientbridge/BridgeServer.java"));
 
-        assertEquals(12, occurrences(source, "createContext(\"/control/"));
+        assertEquals(14, occurrences(source, "createContext(\"/control/"));
         assertTrue(source.contains("MAX_BODY_BYTES = 64 * 1024"));
         assertTrue(source.contains("MAX_JSON_BYTES = 256 * 1024"));
         assertTrue(source.contains("MAX_FRAME_BYTES = 32 * 1024 * 1024"));
         assertTrue(source.contains("remoteAddress.isLoopbackAddress()"));
         assertTrue(source.contains("BridgeSecurity.bearerMatches"));
+        assertTrue(source.contains("createContext(\"/control/command\""));
+        assertTrue(source.contains("mc.getConnection().sendCommand(command)"));
+        assertTrue(source.contains("createContext(\"/control/raw-key\""));
+        assertTrue(source.contains("mc.keyboardHandler.keyPress"));
+        assertTrue(source.contains("HELD_RAW_KEYS"));
+        assertEquals(4, occurrences(source, "releaseAllInputs();"));
+        assertTrue(source.contains("Input cleanup must run on the Minecraft thread"));
+        assertTrue(source.contains("MAX_COMMAND_LENGTH = 256"));
+        assertTrue(source.contains("command = command.substring(1).stripLeading()"));
+        assertTrue(source.contains("command.length() > MAX_COMMAND_LENGTH"));
+        assertFalse(source.contains("command_submission_forbidden"));
+        assertFalse(source.contains("control_arbitrary_commands"));
         assertFalse(source.contains("createContext(\"/" + "chat\""));
     }
 
