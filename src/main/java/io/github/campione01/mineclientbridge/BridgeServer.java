@@ -58,6 +58,7 @@ import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.ClientHooks;
+import org.lwjgl.glfw.GLFW;
 
 public final class BridgeServer {
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
@@ -83,6 +84,7 @@ public final class BridgeServer {
     private static final long FRAME_TIMEOUT_SECONDS = 15;
     private static final AtomicInteger WORKER_SEQUENCE = new AtomicInteger();
     private static final LinkedHashSet<InputConstants.Key> HELD_RAW_KEYS = new LinkedHashSet<>();
+    private static final LinkedHashSet<Integer> HELD_WORLD_MOUSE_BUTTONS = new LinkedHashSet<>();
     private static volatile HttpServer server;
     private static volatile ExecutorService serverExecutor;
     private static volatile BridgeConfig config;
@@ -1156,6 +1158,32 @@ public final class BridgeServer {
             return applyWorldMouseAction(mc, button, action, scrollY);
         }
 
+        if (HELD_WORLD_MOUSE_BUTTONS.contains(button) && action.equals("down")) {
+            JsonObject obj = ok();
+            obj.addProperty("screen", currentScreen.getClass().getName());
+            obj.addProperty("action", action);
+            obj.addProperty("scope", "world");
+            obj.addProperty("button", button);
+            obj.addProperty("handled", true);
+            obj.addProperty("screen_transition", true);
+            obj.addProperty("down", true);
+            return new EndpointResult(200, obj);
+        }
+
+        if (HELD_WORLD_MOUSE_BUTTONS.contains(button)
+                && (action.equals("up") || action.equals("release") || action.equals("click"))) {
+            releaseHeldWorldMouseButton(mc, button);
+            JsonObject obj = ok();
+            obj.addProperty("screen", currentScreen.getClass().getName());
+            obj.addProperty("action", action);
+            obj.addProperty("scope", "world");
+            obj.addProperty("button", button);
+            obj.addProperty("handled", true);
+            obj.addProperty("screen_transition", true);
+            obj.addProperty("down", false);
+            return new EndpointResult(200, obj);
+        }
+
         double screenX = Double.isNaN(x)
                 ? mc.mouseHandler.xpos() * currentScreen.width / mc.getWindow().getScreenWidth()
                 : x;
@@ -1217,14 +1245,23 @@ public final class BridgeServer {
                 handled = true;
             }
         } else {
-            InputConstants.Key mouseKey = InputConstants.Type.MOUSE.getOrCreate(button);
             switch (action) {
-                case "down" -> KeyMapping.set(mouseKey, true);
-                case "up", "release" -> KeyMapping.set(mouseKey, false);
+                case "down" -> {
+                    if (HELD_WORLD_MOUSE_BUTTONS.add(button)) {
+                        dispatchWorldMouseButton(mc, button, GLFW.GLFW_PRESS);
+                    }
+                }
+                case "up", "release" -> releaseHeldWorldMouseButton(mc, button);
                 case "click" -> {
-                    KeyMapping.set(mouseKey, true);
-                    KeyMapping.click(mouseKey);
-                    KeyMapping.set(mouseKey, false);
+                    if (HELD_WORLD_MOUSE_BUTTONS.contains(button)) {
+                        releaseHeldWorldMouseButton(mc, button);
+                    } else {
+                        try {
+                            dispatchWorldMouseButton(mc, button, GLFW.GLFW_PRESS);
+                        } finally {
+                            releaseWorldMouseButton(mc, button);
+                        }
+                    }
                 }
                 default -> throw new IllegalArgumentException("Unsupported mouse action: " + action);
             }
@@ -1237,7 +1274,33 @@ public final class BridgeServer {
         obj.addProperty("button", button);
         obj.addProperty("scroll_y", scrollY);
         obj.addProperty("handled", handled);
+        obj.addProperty("down", HELD_WORLD_MOUSE_BUTTONS.contains(button));
         return new EndpointResult(200, obj);
+    }
+
+    private static void dispatchWorldMouseButton(Minecraft mc, int button, int action) {
+        mc.mouseHandler.onPress(mc.getWindow().getWindow(), button, action, 0);
+    }
+
+    private static void releaseHeldWorldMouseButton(Minecraft mc, int button) {
+        if (HELD_WORLD_MOUSE_BUTTONS.remove(button)) {
+            releaseWorldMouseButton(mc, button);
+        }
+    }
+
+    private static void releaseWorldMouseButton(Minecraft mc, int button) {
+        try {
+            dispatchWorldMouseButton(mc, button, GLFW.GLFW_RELEASE);
+        } finally {
+            KeyMapping.set(InputConstants.Type.MOUSE.getOrCreate(button), false);
+            if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+                mc.mouseHandler.isLeftPressed = false;
+            } else if (button == GLFW.GLFW_MOUSE_BUTTON_RIGHT) {
+                mc.mouseHandler.isRightPressed = false;
+            } else if (button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE) {
+                mc.mouseHandler.isMiddlePressed = false;
+            }
+        }
     }
 
     private static EndpointResult applyScreenText(String text, boolean submit) {
@@ -1700,6 +1763,19 @@ public final class BridgeServer {
                         InputConstants.RELEASE,
                         0);
                 HELD_RAW_KEYS.remove(key);
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+
+        ArrayList<Integer> worldMouseButtons = new ArrayList<>(HELD_WORLD_MOUSE_BUTTONS);
+        for (int button : worldMouseButtons) {
+            try {
+                releaseHeldWorldMouseButton(mc, button);
             } catch (RuntimeException e) {
                 if (failure == null) {
                     failure = e;

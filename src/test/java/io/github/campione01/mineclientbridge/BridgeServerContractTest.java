@@ -32,12 +32,31 @@ class BridgeServerContractTest {
         assertTrue(source.contains("command = command.substring(1).stripLeading()"));
         assertTrue(source.contains("command.length() > MAX_COMMAND_LENGTH"));
         assertTrue(source.contains("ClientHooks.onMouseScroll"));
+        assertTrue(source.contains("HELD_WORLD_MOUSE_BUTTONS"));
+        assertTrue(source.contains("HELD_WORLD_MOUSE_BUTTONS.contains(button) && action.equals(\"down\")"));
+        assertTrue(source.contains("obj.addProperty(\"screen_transition\", true)"));
+        assertTrue(source.contains("if (HELD_WORLD_MOUSE_BUTTONS.add(button))"));
+        assertTrue(source.contains("dispatchWorldMouseButton(mc, button, GLFW.GLFW_PRESS)"));
+        assertTrue(source.contains("case \"up\", \"release\" -> releaseHeldWorldMouseButton(mc, button)"));
+        assertTrue(source.contains("for (int button : worldMouseButtons)"));
+        assertTrue(source.contains("releaseHeldWorldMouseButton(mc, button);"));
+        assertTrue(source.contains("dispatchWorldMouseButton(mc, button, GLFW.GLFW_RELEASE)"));
+        assertTrue(source.contains("mc.mouseHandler.isLeftPressed = false"));
+        assertTrue(source.contains("mc.mouseHandler.isRightPressed = false"));
+        assertTrue(source.contains("mc.mouseHandler.isMiddlePressed = false"));
         assertTrue(source.contains("KeyMapping.resetMapping()"));
         assertTrue(source.contains("world_move_requires_look"));
         assertFalse(source.contains("command_submission_forbidden"));
         assertFalse(source.contains("control_arbitrary_commands"));
         assertFalse(source.contains("mapping_unbound"));
         assertFalse(source.contains("createContext(\"/" + "chat\""));
+
+        String accessTransformer = Files.readString(project.resolve(
+                "src/main/resources/META-INF/accesstransformer.cfg"));
+        assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler onPress(JIII)V"));
+        assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler isLeftPressed"));
+        assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler isRightPressed"));
+        assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler isMiddlePressed"));
     }
 
     private static int occurrences(String source, String needle) {
