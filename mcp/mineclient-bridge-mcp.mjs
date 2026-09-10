@@ -9,9 +9,10 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
 
 const SERVER_NAME = "mineclient-bridge";
-const SERVER_VERSION = "1.1.1";
+const SERVER_VERSION = "1.1.3";
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PREPARED_ROOT_PARENT = path.win32.join(
   fsSync.realpathSync.native(os.tmpdir()),
@@ -36,6 +37,9 @@ const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const MAX_PREFLIGHT_BYTES = 1 * 1024 * 1024;
 const MAX_LAUNCH_SCRIPT_BYTES = 2 * 1024 * 1024;
 const MAX_JAVA_ARGUMENTS_BYTES = 16 * 1024 * 1024;
+const BRIDGE_CLASS_ROOT = "io/github/campione01/mineclientbridge/";
+const ISOLATION_MIXINS = ["InputConstantsMixin", "MouseHandlerMixin", "KeyboardHandlerMixin"];
+const ISOLATION_MIXIN_CONFIG = "mineclient_bridge.mixins.json";
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const DESCRIPTOR_KEYS = [
   "run_id",
@@ -438,7 +442,7 @@ async function launchClient(args) {
     ) {
       throw new Error(`run_id ${runId} is registered to a different prepared root`);
     }
-    await revalidateSession(existing);
+    assertInputIsolation(existing, await revalidateSession(existing), true);
     return launchResult(existing);
   }
 
@@ -473,6 +477,7 @@ async function launchClient(args) {
   let tokenWritten = false;
   let launcherStarted = false;
   let launcherState = null;
+  let ownedDescriptor = null;
   try {
     await writeExclusiveJson(configPath, bridgeConfig);
     configWritten = true;
@@ -504,12 +509,15 @@ async function launchClient(args) {
           evidence_root: prepared.evidenceRoot
         };
         assertBridgeIdentity(descriptor, status);
+        ownedDescriptor = descriptor;
+        assertInputIsolation(descriptor, status, true);
         await delay(Math.min(150, pollIntervalMs));
-        await revalidateSession(descriptor, Math.min(2000, pollIntervalMs * 4));
+        assertInputIsolation(descriptor,
+          await revalidateSession(descriptor, Math.min(2000, pollIntervalMs * 4)), true);
         await saveDescriptor(descriptor);
         return launchResult(descriptor);
       } catch (error) {
-        if (isIdentityError(error)) {
+        if (isIdentityError(error) || error instanceof InputIsolationError) {
           throw error;
         }
       }
@@ -519,6 +527,15 @@ async function launchClient(args) {
 
     throw new Error(`Minecraft client did not become ready within ${launchTimeoutMs} ms for run_id ${runId}`);
   } catch (error) {
+    if (error instanceof InputIsolationError && ownedDescriptor) {
+      try {
+        await requestOwnedClientClose(ownedDescriptor);
+      } catch (cleanupError) {
+        // Keep an exact descriptor so status/frame/close can recover this owned client.
+        await saveDescriptor(ownedDescriptor);
+        throw new Error(`${error.message}; owned client cleanup failed: ${cleanupError.message}`);
+      }
+    }
     if (configWritten && !launcherStarted) {
       await removeOwnedConfig(configPath, bridgeConfig);
     }
@@ -592,12 +609,13 @@ async function clientQuery(args) {
 async function clientInput(args) {
   const parsed = parseInput(args);
   const descriptor = await readDescriptor(parsed.runId);
-  await revalidateSession(descriptor);
+  const status = await revalidateSession(descriptor);
 
   let result;
   if (parsed.kind === "release_all") {
     result = await requestJson(descriptor, "POST", "/control/release-all", undefined);
   } else {
+    assertInputIsolation(descriptor, status);
     result = await requestJson(descriptor, "POST", parsed.endpoint, parsed.body);
   }
 
@@ -640,16 +658,7 @@ async function closeClient(args) {
     }
     throw error;
   }
-  await requestJson(descriptor, "POST", "/control/release-all", undefined);
-  await revalidateSession(descriptor);
-  const result = await requestJson(descriptor, "POST", "/control/close", undefined);
-  const deadline = Date.now() + DEFAULT_CLOSE_TIMEOUT_MS;
-  while (Date.now() < deadline && isProcessAlive(descriptor.process_id)) {
-    await delay(100);
-  }
-  if (isProcessAlive(descriptor.process_id)) {
-    throw new Error(`Client process ${descriptor.process_id} did not exit after the close request`);
-  }
+  const result = await requestOwnedClientClose(descriptor);
   await removeDescriptor(runId);
   return {
     closed: true,
@@ -659,6 +668,26 @@ async function closeClient(args) {
     desktop_name: descriptor.desktop_name,
     bridge: sanitizeForOutput(result, descriptor.token)
   };
+}
+
+async function requestOwnedClientClose(descriptor) {
+  if (!isProcessAlive(descriptor.process_id)) return { already_exited: true };
+  await revalidateSession(descriptor);
+  try {
+    await requestJson(descriptor, "POST", "/control/release-all", undefined);
+  } catch {
+    // A failed release must not prevent closing an identity-verified unsafe client.
+  }
+  await revalidateSession(descriptor);
+  const result = await requestJson(descriptor, "POST", "/control/close", undefined);
+  const deadline = Date.now() + DEFAULT_CLOSE_TIMEOUT_MS;
+  while (Date.now() < deadline && isProcessAlive(descriptor.process_id)) {
+    await delay(100);
+  }
+  if (isProcessAlive(descriptor.process_id)) {
+    throw new Error(`Client process ${descriptor.process_id} did not exit after the close request`);
+  }
+  return result;
 }
 
 function parseRunIdOnly(args) {
@@ -1066,6 +1095,7 @@ async function validatePreparedRoot(runId, preparedRootValue) {
 
   const runtimeRoot = path.join(preparedRoot, "game");
   await assertNormalDirectory(runtimeRoot);
+  await assertPreparedInputIsolationJar(path.join(runtimeRoot, "mods"));
   const evidenceRoot = path.join(runtimeRoot, "captures");
   return { runId, preparedRoot, desktopName, runtimeRoot, evidenceRoot, launchScript };
 }
@@ -1083,6 +1113,126 @@ async function assertNoReparsePath(parent, target) {
       throw new Error(`Reparse points are not allowed in prepared roots: ${current}`);
     }
   }
+}
+
+async function assertPreparedInputIsolationJar(modsRoot) {
+  await assertNormalDirectory(modsRoot);
+  let bridgeCount = 0;
+  for (const file of await fs.readdir(modsRoot, { withFileTypes: true })) {
+    if (!file.name.toLowerCase().endsWith(".jar")) continue;
+    const jarPath = path.join(modsRoot, file.name);
+    await assertNormalFile(jarPath, 22, 0xffffffff);
+    const jar = await fs.open(jarPath, "r");
+    try {
+      const entries = await readJarDirectory(jar);
+      if (![...entries.keys()].some((name) => name.startsWith(BRIDGE_CLASS_ROOT)) &&
+          !entries.has(ISOLATION_MIXIN_CONFIG)) continue;
+      bridgeCount++;
+      const classes = ["ClientInputIsolation", ...ISOLATION_MIXINS.map((name) => `mixin/${name}`)];
+      for (const name of classes) {
+        const entryName = `${BRIDGE_CLASS_ROOT}${name}.class`;
+        const bytes = await readJarEntry(jar, entries, entryName);
+        if (bytes.length < 8 || bytes.readUInt32BE(0) !== 0xcafebabe) {
+          throw new Error(`Input isolation JAR has an invalid class: ${entryName}`);
+        }
+      }
+      const config = JSON.parse((await readJarEntry(jar, entries, ISOLATION_MIXIN_CONFIG)).toString("utf8"));
+      if (!isPlainObject(config) || config.required !== true ||
+          config.package !== "io.github.campione01.mineclientbridge.mixin" ||
+          !Array.isArray(config.client) || !ISOLATION_MIXINS.every((name) => config.client.includes(name)) ||
+          config.injectors?.defaultRequire !== 1) {
+        throw new Error("Input isolation JAR lacks the required fail-closed client mixin configuration");
+      }
+    } catch (error) {
+      throw new Error(`Prepared input isolation JAR verification failed for ${file.name}: ${error.message}`);
+    } finally {
+      await jar.close();
+    }
+  }
+  if (bridgeCount !== 1) {
+    throw new Error(`Prepared input isolation requires exactly one capable MineClient Bridge JAR; found ${bridgeCount}`);
+  }
+}
+
+// Inspect ZIP metadata and the few capability entries without unpacking a mod directory.
+async function readJarDirectory(jar) {
+  const size = (await jar.stat()).size;
+  const tailOffset = Math.max(0, size - 65557);
+  const tail = await readJarBytes(jar, tailOffset, size - tailOffset);
+  let end = -1;
+  for (let offset = tail.length - 22; offset >= 0; offset--) {
+    if (tail.readUInt32LE(offset) === 0x06054b50 &&
+        offset + 22 + tail.readUInt16LE(offset + 20) === tail.length) {
+      end = offset;
+      break;
+    }
+  }
+  if (end < 0) throw new Error("ZIP end directory is missing");
+  const count = tail.readUInt16LE(end + 10);
+  const directorySize = tail.readUInt32LE(end + 12);
+  const directoryOffset = tail.readUInt32LE(end + 16);
+  if (tail.readUInt16LE(end + 4) !== 0 || tail.readUInt16LE(end + 6) !== 0 ||
+      tail.readUInt16LE(end + 8) !== count || count === 0xffff ||
+      directorySize > 16 * 1024 * 1024 || directoryOffset + directorySize > tailOffset + end) {
+    throw new Error("Unsupported or invalid ZIP directory");
+  }
+  const directory = await readJarBytes(jar, directoryOffset, directorySize);
+  const entries = new Map();
+  let offset = 0;
+  for (let index = 0; index < count; index++) {
+    if (offset + 46 > directory.length || directory.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error("Malformed ZIP directory entry");
+    }
+    const nameLength = directory.readUInt16LE(offset + 28);
+    const next = offset + 46 + nameLength + directory.readUInt16LE(offset + 30) + directory.readUInt16LE(offset + 32);
+    if (next > directory.length) throw new Error("Truncated ZIP directory entry");
+    const name = directory.toString("utf8", offset + 46, offset + 46 + nameLength);
+    if (entries.has(name)) throw new Error("Duplicate ZIP entry");
+    entries.set(name, {
+      flags: directory.readUInt16LE(offset + 8),
+      method: directory.readUInt16LE(offset + 10),
+      compressedSize: directory.readUInt32LE(offset + 20),
+      size: directory.readUInt32LE(offset + 24),
+      offset: directory.readUInt32LE(offset + 42),
+      directoryOffset
+    });
+    offset = next;
+  }
+  if (offset !== directory.length) throw new Error("ZIP directory length mismatch");
+  return entries;
+}
+
+async function readJarEntry(jar, entries, name) {
+  const entry = entries.get(name);
+  if (!entry) throw new Error(`Input isolation JAR is missing ${name}`);
+  if ((entry.flags & 1) !== 0 || ![0, 8].includes(entry.method) ||
+      entry.size > 256 * 1024 || entry.compressedSize > 256 * 1024 ||
+      entry.offset + 30 > entry.directoryOffset) {
+    throw new Error(`Unsupported input isolation JAR entry ${name}`);
+  }
+  const header = await readJarBytes(jar, entry.offset, 30);
+  const nameLength = header.readUInt16LE(26);
+  const dataOffset = entry.offset + 30 + nameLength + header.readUInt16LE(28);
+  if (header.readUInt32LE(0) !== 0x04034b50 || header.readUInt16LE(6) !== entry.flags ||
+      header.readUInt16LE(8) !== entry.method || dataOffset + entry.compressedSize > entry.directoryOffset ||
+      (await readJarBytes(jar, entry.offset + 30, nameLength)).toString("utf8") !== name) {
+    throw new Error(`Malformed input isolation JAR entry ${name}`);
+  }
+  const compressed = await readJarBytes(jar, dataOffset, entry.compressedSize);
+  const bytes = entry.method === 0 ? compressed : inflateRawSync(compressed, { maxOutputLength: 256 * 1024 });
+  if (bytes.length !== entry.size) throw new Error(`Input isolation JAR size mismatch for ${name}`);
+  return bytes;
+}
+
+async function readJarBytes(jar, offset, length) {
+  const bytes = Buffer.alloc(length);
+  let read = 0;
+  while (read < length) {
+    const result = await jar.read(bytes, read, length - read, offset + read);
+    if (result.bytesRead === 0) throw new Error("Truncated ZIP data");
+    read += result.bytesRead;
+  }
+  return bytes;
 }
 
 async function assertNoReparseTree(root) {
@@ -1155,6 +1305,7 @@ async function spawnPreparedLauncher(prepared) {
     ...process.env,
     MINECLIENT_BRIDGE_RUN_ID: prepared.runId,
     MINECLIENT_BRIDGE_DESKTOP_NAME: prepared.desktopName,
+    MINECLIENT_BRIDGE_ISOLATED_INPUT: "true",
     MINECLIENT_BRIDGE_RUNTIME_ROOT: prepared.runtimeRoot,
     MINECLIENT_BRIDGE_EVIDENCE_ROOT: prepared.evidenceRoot
   };
@@ -1248,6 +1399,19 @@ function assertBridgeIdentity(descriptor, status) {
 }
 
 class IdentityError extends Error {}
+class InputIsolationError extends Error {}
+
+function assertInputIsolation(descriptor, status, required = false) {
+  if (!required && descriptor.desktop_name.toLowerCase() === "default") return;
+  if (!isPlainObject(status.input_isolation) || status.input_isolation.enabled !== true ||
+      status.input_isolation.mode !== "process_local_virtual" ||
+      !Number.isSafeInteger(status.input_isolation.native_callback_registration_blocks) ||
+      status.input_isolation.native_callback_registration_blocks < 2) {
+    throw new InputIsolationError(`Background input isolation is unavailable for run_id ${descriptor.run_id}; ` +
+      "required input_isolation.enabled=true, mode=process_local_virtual, " +
+      "and integer native_callback_registration_blocks>=2");
+  }
+}
 
 function isIdentityError(error) {
   return error instanceof IdentityError;

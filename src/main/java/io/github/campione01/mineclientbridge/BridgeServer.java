@@ -957,6 +957,21 @@ public final class BridgeServer {
             }
         }
         obj.add("held_mappings", heldMappings);
+        ClientInputIsolation.Statistics isolationStats = ClientInputIsolation.statistics();
+        JsonObject isolation = new JsonObject();
+        isolation.addProperty("enabled", ClientInputIsolation.enabled());
+        isolation.addProperty("mode", ClientInputIsolation.enabled() ? "process_local_virtual" : "native");
+        isolation.addProperty("synthetic_dispatches", isolationStats.syntheticDispatches());
+        isolation.addProperty("synthetic_input_callbacks", isolationStats.syntheticInputCallbacks());
+        isolation.addProperty("suppressed_native_callbacks", isolationStats.suppressedNativeCallbacks());
+        isolation.addProperty("native_callback_registration_blocks", isolationStats.suppressedNativeRegistrations());
+        isolation.addProperty("suppressed_cursor_operations", isolationStats.suppressedCursorOperations());
+        isolation.addProperty("suppressed_raw_mouse_updates", isolationStats.suppressedRawMouseUpdates());
+        isolation.addProperty("virtual_key_reads", isolationStats.virtualKeyReads());
+        isolation.addProperty("virtual_clipboard_reads", isolationStats.virtualClipboardReads());
+        isolation.addProperty("virtual_clipboard_writes", isolationStats.virtualClipboardWrites());
+        isolation.addProperty("held_keys", isolationStats.heldKeys());
+        obj.add("input_isolation", isolation);
         return obj;
     }
 
@@ -1065,13 +1080,13 @@ public final class BridgeServer {
             case "down" -> {
                 if (!wasDown) {
                     HELD_RAW_KEYS.add(key);
-                    mc.keyboardHandler.keyPress(window, key.getValue(), -1, InputConstants.PRESS, 0);
+                    dispatchRawKeyboard(mc, window, key, InputConstants.PRESS);
                     events = 1;
                 }
             }
             case "up" -> {
                 if (wasDown) {
-                    mc.keyboardHandler.keyPress(window, key.getValue(), -1, InputConstants.RELEASE, 0);
+                    dispatchRawKeyboard(mc, window, key, InputConstants.RELEASE);
                     HELD_RAW_KEYS.remove(key);
                     events = 1;
                 }
@@ -1079,10 +1094,10 @@ public final class BridgeServer {
             case "click" -> {
                 if (!wasDown) {
                     HELD_RAW_KEYS.add(key);
-                    mc.keyboardHandler.keyPress(window, key.getValue(), -1, InputConstants.PRESS, 0);
+                    dispatchRawKeyboard(mc, window, key, InputConstants.PRESS);
                     events++;
                 }
-                mc.keyboardHandler.keyPress(window, key.getValue(), -1, InputConstants.RELEASE, 0);
+                dispatchRawKeyboard(mc, window, key, InputConstants.RELEASE);
                 HELD_RAW_KEYS.remove(key);
                 events++;
             }
@@ -1097,6 +1112,11 @@ public final class BridgeServer {
         obj.addProperty("down", HELD_RAW_KEYS.contains(key));
         obj.addProperty("events", events);
         return new EndpointResult(200, obj);
+    }
+
+    private static void dispatchRawKeyboard(Minecraft mc, long window, InputConstants.Key key, int action) {
+        ClientInputIsolation.setKeyDown(key.getValue(), action != InputConstants.RELEASE);
+        mc.keyboardHandler.keyPress(window, key.getValue(), -1, action, ClientInputIsolation.modifiers());
     }
 
     private static InputConstants.Key resolveKeyboardKey(String input) {
@@ -1279,7 +1299,7 @@ public final class BridgeServer {
     }
 
     private static void dispatchWorldMouseButton(Minecraft mc, int button, int action) {
-        mc.mouseHandler.onPress(mc.getWindow().getWindow(), button, action, 0);
+        mc.mouseHandler.onPress(mc.getWindow().getWindow(), button, action, ClientInputIsolation.modifiers());
     }
 
     private static void releaseHeldWorldMouseButton(Minecraft mc, int button) {
@@ -1369,11 +1389,13 @@ public final class BridgeServer {
                 if (result.isDone()) {
                     return;
                 }
-                try {
-                    result.complete(operation.call());
-                } catch (Throwable error) {
-                    result.completeExceptionally(error);
-                }
+                ClientInputIsolation.syntheticDispatch(() -> {
+                    try {
+                        result.complete(operation.call());
+                    } catch (Throwable error) {
+                        result.completeExceptionally(error);
+                    }
+                });
             });
         } catch (RejectedExecutionException | IllegalStateException e) {
             result.completeExceptionally(e);
@@ -1734,7 +1756,9 @@ public final class BridgeServer {
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc.isSameThread()) {
-                releaseAllInputs();
+                ClientInputIsolation.syntheticDispatch(() -> {
+                    releaseAllInputs();
+                });
                 return;
             }
             callOnMinecraftThread(() -> {
@@ -1756,12 +1780,7 @@ public final class BridgeServer {
         RuntimeException failure = null;
         for (InputConstants.Key key : rawKeys) {
             try {
-                mc.keyboardHandler.keyPress(
-                        mc.getWindow().getWindow(),
-                        key.getValue(),
-                        -1,
-                        InputConstants.RELEASE,
-                        0);
+                dispatchRawKeyboard(mc, mc.getWindow().getWindow(), key, InputConstants.RELEASE);
                 HELD_RAW_KEYS.remove(key);
             } catch (RuntimeException e) {
                 if (failure == null) {
@@ -1785,6 +1804,7 @@ public final class BridgeServer {
             }
         }
         KeyMapping.releaseAll();
+        ClientInputIsolation.releaseAllKeys();
         if (failure != null) {
             throw failure;
         }

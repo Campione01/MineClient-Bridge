@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.github.campione01.mineclientbridge.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "InputConstantsMixin",
+    "MouseHandlerMixin",
+    "KeyboardHandlerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

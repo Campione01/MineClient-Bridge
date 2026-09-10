@@ -2,7 +2,7 @@
 
 ![MineClient Bridge](docs/assets/mineclient-bridge-avatar-400.png)
 
-MineClient Bridge is a client-side NeoForge 1.21.1 mod that exposes an authenticated HTTP interface on the local loopback address. External tools can inspect the active Minecraft client, capture its current framebuffer, and operate configured keys and GUI controls without moving the user's desktop cursor.
+MineClient Bridge is a client-side NeoForge 1.21.1 mod that exposes an authenticated HTTP interface on the local loopback address. External tools can inspect the active Minecraft client, capture its current framebuffer, and operate configured keys and GUI controls. Isolated background sessions use process-local virtual input rather than the operating system cursor and clipboard.
 
 The repository also includes an optional MCP server and a reusable Codex skill for isolated client acceptance workflows. MineClient Bridge is independent of any gameplay mod.
 
@@ -45,11 +45,30 @@ Any local program that receives the token can operate the exposed client actions
 ## Installation
 
 1. Install NeoForge for Minecraft 1.21.1.
-2. Place `mineclient-bridge-neoforge-1.21.1-1.1.2.jar` in the client's `mods` directory.
+2. Place `mineclient-bridge-neoforge-1.21.1-1.1.3.jar` in the client's `mods` directory.
 3. Start the client. The mod creates its config and token files on first launch.
 4. Connect an authorized loopback client to `http://127.0.0.1:38121` using the generated token.
 
 The bridge is enabled by default. Set `"enabled": false` in `config/mineclient-bridge.json` to turn it off. The host is always constrained to loopback. Runtime overrides are available through `mineclientBridge.*` system properties or `MINECLIENT_BRIDGE_*` environment variables for `enabled`, `host`, `port`, and `token`.
+
+## Background Input Isolation
+
+Version 1.1.3 virtualizes mouse capture/release, keyboard polling and clipboard
+access in isolated sessions. Physical keyboard and mouse callbacks are ignored
+there; authenticated Bridge input still runs through Minecraft's handlers.
+Normal foreground Minecraft sessions retain their native input behavior.
+
+Enable isolation with `-DmineclientBridge.isolatedInput=true` or
+`MINECLIENT_BRIDGE_ISOLATED_INPUT=true`. A supplied non-Default
+`mineclientBridge.desktopName` or `MINECLIENT_BRIDGE_DESKTOP_NAME` also enables
+it by default. The bundled background launcher explicitly enables it and checks
+the installed isolation classes before launch and the live capability before
+input. `/control/status` reports `input_isolation` and its suppression counters.
+
+An independent Windows Desktop alone does not isolate the shared Windows cursor.
+These hooks cover Minecraft's input APIs; they are not an operating-system
+sandbox for arbitrary third-party native code. Gameplay mods that directly warp
+the OS pointer must use a process-local path in their background integration.
 
 ## HTTP Endpoints
 
@@ -76,7 +95,7 @@ This is a real 960x540 framebuffer from the NeoForge 1.21.1 smoke session. The g
 node .\mcp\self-test.mjs
 ```
 
-The release artifact is `build/libs/mineclient-bridge-neoforge-1.21.1-1.1.2.jar`.
+The release artifact is `build/libs/mineclient-bridge-neoforge-1.21.1-1.1.3.jar`.
 
 ## License And References
 

@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { deflateRawSync } from "node:zlib";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_FILE = path.join(HERE, "mineclient-bridge-mcp.mjs");
@@ -20,6 +21,12 @@ const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64"
 );
+const INPUT_ISOLATION = {
+  enabled: true,
+  mode: "process_local_virtual",
+  suppressed_cursor_operations: 0,
+  native_callback_registration_blocks: 2
+};
 let lastClientStderr = "";
 
 if (process.argv[2] === "--fixture-bridge") {
@@ -92,10 +99,10 @@ async function runSelfTest() {
     const initialized = await client.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "mineclient-bridge-self-test", version: "1.1.1" }
+      clientInfo: { name: "mineclient-bridge-self-test", version: "1.1.3" }
     });
     assert.equal(initialized.result.serverInfo.name, "mineclient-bridge");
-    assert.equal(initialized.result.serverInfo.version, "1.1.1");
+    assert.equal(initialized.result.serverInfo.version, "1.1.3");
 
     const listed = await client.request("tools/list", {});
     const toolNames = listed.result.tools.map((tool) => tool.name);
@@ -185,6 +192,31 @@ async function runSelfTest() {
     assert.deepEqual(Buffer.from(image.data, "base64"), PNG);
     assert.match(identityText.text, new RegExp(`run_id=${manualRun}`));
 
+    for (const isolation of [undefined, { ...INPUT_ISOLATION, enabled: false },
+      { ...INPUT_ISOLATION, mode: "native" }, { ...INPUT_ISOLATION, enabled: "true" },
+      { enabled: true, mode: "process_local_virtual" },
+      ...[0, 1, 2.5, "2"].map((count) => ({ ...INPUT_ISOLATION, native_callback_registration_blocks: count }))]) {
+      manualBridge.setInputIsolation(isolation);
+      const start = manualBridge.requests.length;
+      for (const input of [{ kind: "key", mapping: "key.forward", action: "press" },
+        { kind: "mouse", action: "click", button: 0 }]) {
+        await expectToolError(client, "minecraft_client_input", { run_id: manualRun, ...input }, /input isolation/);
+      }
+      assert.equal(manualBridge.requests.slice(start).some((entry) => entry.method === "POST"), false,
+        "blocked isolation must not dispatch key/mouse input");
+      for (const name of ["minecraft_client_status", "minecraft_client_frame"]) {
+        assert.equal((await client.callTool(name, { run_id: manualRun })).isError, false);
+      }
+      assert.equal((await client.callTool("minecraft_client_input", {
+        run_id: manualRun, kind: "release_all"
+      })).isError, false);
+    }
+    manualBridge.setInputIsolation(INPUT_ISOLATION);
+    assert.equal((await client.callTool("minecraft_client_input", {
+      run_id: manualRun, kind: "key", mapping: "key.forward", action: "tap"
+    })).isError, false);
+    assert(manualBridge.requests.some((entry) => entry.path === "/control/key"));
+
     await expectToolError(client, "minecraft_client_register", {
       run_id: overlapRun,
       base_url: "http://127.0.0.1:65534",
@@ -209,6 +241,41 @@ async function runSelfTest() {
       await exists(path.join(invalidLaunchRoot, "game", "config", "mineclient-bridge.json")),
       false
     );
+
+    for (const variant of ["old", "missing-mixin", "bad-config", "duplicate"]) {
+      const runId = `mineclient-jar-${variant}-${suffix}`;
+      const root = path.join(PREPARED_PARENT, runId);
+      createdRoots.push(root);
+      await createPreparedFixture(root, runId, `FixtureDesktop-${runId}`, false);
+      await fs.writeFile(path.join(root, "game", "mods", "renamed-client.jar"), fixtureJar(variant));
+      if (variant === "duplicate") {
+        await fs.writeFile(path.join(root, "game", "mods", "second-name.jar"), fixtureJar());
+      }
+      await expectToolError(client, "minecraft_client_launch", { run_id: runId, prepared_root: root }, /input isolation/i);
+      assert.equal(await exists(path.join(root, "fixture-launch-started.txt")), false);
+      assert.equal(await exists(path.join(root, "game", "config", "mineclient-bridge.json")), false);
+    }
+
+    for (const [label, isolation] of [["missing", null], ["disabled", { ...INPUT_ISOLATION, enabled: false }],
+      ["wrong-mode", { ...INPUT_ISOLATION, mode: "native" }],
+      ["missing-registration", { enabled: true, mode: "process_local_virtual" }],
+      ...[0, 1].map((count) => [`registration-${count}`, { ...INPUT_ISOLATION, native_callback_registration_blocks: count }])]) {
+      const runId = `mineclient-unsafe-${label}-${suffix}`;
+      const root = path.join(PREPARED_PARENT, runId);
+      createdRoots.push(root);
+      await createPreparedFixture(root, runId, `FixtureDesktop-${runId}`, false);
+      await fs.writeFile(path.join(root, "fixture-input-isolation.json"), JSON.stringify(isolation));
+      await expectToolError(client, "minecraft_client_launch", { run_id: runId, prepared_root: root }, /input isolation/);
+      const pid = Number.parseInt(await fs.readFile(path.join(root, "fixture-child-pid.txt"), "utf8"), 10);
+      assert.equal(await processIsAlive(pid), false, "unsafe launched bridge must exit before returning");
+      assert.equal(await exists(path.join(stateRoot, `${runId}.json`)), false);
+      assert.equal(await exists(path.join(root, "game", "captures", "fixture-closed.marker")), true);
+      const requests = (await fs.readFile(path.join(root, "game", "captures", "fixture-requests.jsonl"), "utf8"))
+        .trim().split("\n").map((line) => JSON.parse(line));
+      assert(requests.some((entry) => entry.path === "/control/release-all"));
+      assert(requests.some((entry) => entry.path === "/control/close"));
+      assert.equal(requests.some((entry) => ["/control/key", "/control/mouse"].includes(entry.path)), false);
+    }
 
     const launchResult = await client.callTool(
       "minecraft_client_launch",
@@ -458,6 +525,7 @@ async function runSelfTest() {
     assert(heldRawKeyIndex >= 0);
     assert(releaseAllIndex > heldRawKeyIndex);
 
+    await fs.writeFile(path.join(launchRoot, "fixture-input-isolation.json"), "null");
     const launchedClose = await client.callTool(
       "minecraft_client_close",
       { run_id: launchRun },
@@ -507,7 +575,7 @@ async function runSelfTest() {
     assert.equal(await processIsAlive(fixturePid), false);
     assert.equal(clientStderrWasEmpty(), true);
     process.stdout.write(
-      `SELF_TEST_OK tools=7 launch=ready register=exact frame=png query=4 input=15 close=pid-exit exit=release secrets=redacted\n`
+      `SELF_TEST_OK tools=7 launch=ready register=exact frame=png query=4 input=15 isolation=capability-gated native-callbacks=integer-min-2 jar=4-rejections unsafe-launch=6-closed close=pid-exit exit=release secrets=redacted\n`
     );
 
     function clientStderrWasEmpty() {
@@ -535,10 +603,76 @@ async function runSelfTest() {
   }
 }
 
+function fixtureJar(variant = "current") {
+  const prefix = "io/github/campione01/mineclientbridge/";
+  const mixins = ["InputConstantsMixin", "MouseHandlerMixin", "KeyboardHandlerMixin"];
+  const classNames = variant === "old" ? ["BridgeServer"] :
+    ["ClientInputIsolation", ...mixins.filter((name) => variant !== "missing-mixin" || name !== "KeyboardHandlerMixin")
+      .map((name) => `mixin/${name}`)];
+  const files = classNames.map((name) => [
+    `${prefix}${name}.class`, Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 65])
+  ]);
+  if (variant !== "old") {
+    files.push(["mineclient_bridge.mixins.json", Buffer.from(JSON.stringify({
+      required: true,
+      package: "io.github.campione01.mineclientbridge.mixin",
+      client: variant === "bad-config" ? ["InputConstantsMixin"] : mixins,
+      injectors: { defaultRequire: 1 }
+    }))]);
+  }
+  const locals = [];
+  const directory = [];
+  let offset = 0;
+  for (const [name, bytes] of files) {
+    const filename = Buffer.from(name);
+    const compressed = deflateRawSync(bytes);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(zipCrc32(bytes), 14);
+    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(bytes.length, 22);
+    local.writeUInt16LE(filename.length, 26);
+    locals.push(local, filename, compressed);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(zipCrc32(bytes), 16);
+    central.writeUInt32LE(compressed.length, 20);
+    central.writeUInt32LE(bytes.length, 24);
+    central.writeUInt16LE(filename.length, 28);
+    central.writeUInt32LE(offset, 42);
+    directory.push(central, filename);
+    offset += local.length + filename.length + compressed.length;
+  }
+  const central = Buffer.concat(directory);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(central.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, central, end]);
+}
+
+function zipCrc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 async function createPreparedFixture(root, runId, desktopName, mismatchRoot) {
   const game = path.join(root, "game");
   const launchDirectory = path.join(root, "launch");
   await fs.mkdir(game, { recursive: true });
+  await fs.mkdir(path.join(game, "mods"), { recursive: true });
+  await fs.writeFile(path.join(game, "mods", "renamed-client.jar"), fixtureJar());
   await fs.mkdir(launchDirectory, { recursive: true });
   await fs.copyFile(fileURLToPath(import.meta.url), path.join(root, "fixture-bridge.mjs"));
   await fs.writeFile(path.join(launchDirectory, "java-arguments.txt"), "# self-test fixture\n", "utf8");
@@ -578,6 +712,7 @@ async function runFixtureBridge(root) {
   if (typeof root !== "string" || path.win32.basename(root).length === 0) {
     throw new Error("Fixture root is required");
   }
+  assert.equal(process.env.MINECLIENT_BRIDGE_ISOLATED_INPUT, "true");
   const config = JSON.parse(
     await fs.readFile(path.join(root, "game", "config", "mineclient-bridge.json"), "utf8")
   );
@@ -601,6 +736,10 @@ async function runFixtureBridge(root) {
     host: config.host,
     port: config.port,
     closeOnRequest: true,
+    async getInputIsolation() {
+      const override = path.join(root, "fixture-input-isolation.json");
+      return await exists(override) ? JSON.parse(await fs.readFile(override, "utf8")) : INPUT_ISOLATION;
+    },
     record(entry) {
       fsSync.appendFileSync(requestLog, `${JSON.stringify(entry)}\n`, "utf8");
     },
@@ -636,6 +775,8 @@ async function createBridgeServer(options) {
       if (request.method === "GET" && url.pathname === "/control/status") {
         writeJson(response, 200, {
           ...options.identity,
+          input_isolation: options.getInputIsolation ? await options.getInputIsolation() :
+            Object.hasOwn(options, "inputIsolation") ? options.inputIsolation : INPUT_ISOLATION,
           ready: true,
           token_echo: options.token,
           diagnostic: `authenticated:${options.token}`
@@ -707,6 +848,7 @@ async function createBridgeServer(options) {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
+    setInputIsolation(value) { options.inputIsolation = value; },
     closed,
     async close() {
       if (!server.listening) {
