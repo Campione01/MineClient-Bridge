@@ -2,6 +2,10 @@
 
 This directory contains a dependency-free stdio MCP server for MineClient Bridge.
 
+The stdio transport is UTF-8 newline-delimited JSON (NDJSON), not Content-Length
+framing. Each incoming line is limited to 1 MiB before its LF terminator, including
+when the line is still incomplete. Stdout contains only JSON-RPC messages.
+
 ## Requirements
 
 - Node.js 20 or newer.
@@ -47,7 +51,13 @@ Production descriptors are stored outside the repository. They contain the sessi
 ## Test
 
 ```powershell
-node .\self-test.mjs
+npm test
 ```
 
 The self-test covers all seven tools, launch and registration identity, PNG transport, bounded queries and inputs including commands and raw keys, release-before-close behavior, exact PID exit, and secret redaction.
+
+The transport gate also covers initialize/tools/list over real stdio, clean output,
+fragmented UTF-8, coalesced requests, CRLF, malformed JSON and complete/incomplete
+line-size limits. Do not deploy the MCP adapter before this full test command
+passes. After deployment, run the same tests from the installed directory and
+verify that its server SHA-256 matches the tested source.

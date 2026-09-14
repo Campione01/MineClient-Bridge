@@ -23,7 +23,7 @@ jobs:
       - name: Build and test mod
         run: .\gradlew.bat clean build --no-daemon --console=plain
       - name: Test MCP server
-        run: node .\mcp\self-test.mjs
+        run: npm --prefix .\mcp test
       - uses: actions/upload-artifact@v4
         with:
           name: mineclient-bridge-neoforge-1.21.1

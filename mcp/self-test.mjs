@@ -899,21 +899,15 @@ function createMcpClient(extraEnvironment) {
   child.stdout.on("data", (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
     while (true) {
-      const headerEnd = buffer.indexOf("\r\n\r\n");
-      if (headerEnd < 0) {
+      const newlineIndex = buffer.indexOf(0x0a);
+      if (newlineIndex < 0) {
         break;
       }
-      const header = buffer.subarray(0, headerEnd).toString("ascii");
-      const match = /Content-Length:\s*(\d+)/i.exec(header);
-      assert(match, "MCP response must include Content-Length");
-      const length = Number.parseInt(match[1], 10);
-      const bodyStart = headerEnd + 4;
-      const bodyEnd = bodyStart + length;
-      if (buffer.length < bodyEnd) {
-        break;
-      }
-      const message = JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString("utf8"));
-      buffer = buffer.subarray(bodyEnd);
+      const line = buffer.subarray(0, newlineIndex).toString("utf8");
+      assert.notEqual(line.trim(), "", "MCP stdout must contain only JSON-RPC messages");
+      const message = JSON.parse(line);
+      assert.equal(message.jsonrpc, "2.0");
+      buffer = buffer.subarray(newlineIndex + 1);
       const waiting = pending.get(message.id);
       if (waiting) {
         pending.delete(message.id);
@@ -925,6 +919,9 @@ function createMcpClient(extraEnvironment) {
   child.stderr.on("data", (chunk) => {
     stderrText += chunk.toString("utf8");
     lastClientStderr = stderrText;
+  });
+  child.stdout.once("end", () => {
+    assert.equal(buffer.length, 0, "MCP responses must end with a newline");
   });
   child.once("exit", (code) => {
     ended = true;
@@ -943,7 +940,7 @@ function createMcpClient(extraEnvironment) {
       const id = nextId++;
       const message = { jsonrpc: "2.0", id, method, params };
       const body = JSON.stringify(message);
-      child.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+      child.stdin.write(`${body}\n`);
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);

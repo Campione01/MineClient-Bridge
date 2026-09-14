@@ -300,40 +300,25 @@ function getTestNumber(name, fallback) {
 
 function parseMessages() {
   while (true) {
-    const headerEnd = inputBuffer.indexOf("\r\n\r\n");
-    if (headerEnd < 0) {
-      if (inputBuffer.length > 8192) {
-        sendError(null, -32700, "MCP frame header is too large");
-        process.stdin.pause();
-        void shutdown(1, true);
-      }
-      return;
-    }
-
-    const header = inputBuffer.subarray(0, headerEnd).toString("ascii");
-    const match = /(?:^|\r\n)Content-Length:\s*(\d+)\s*(?:\r\n|$)/i.exec(header);
-    if (!match) {
-      inputBuffer = inputBuffer.subarray(headerEnd + 4);
-      sendError(null, -32700, "MCP frame is missing Content-Length");
-      continue;
-    }
-
-    const length = Number.parseInt(match[1], 10);
-    if (!Number.isSafeInteger(length) || length < 0 || length > MAX_RPC_BODY_BYTES) {
-      sendError(null, -32700, "MCP frame body length is invalid");
+    const newlineIndex = inputBuffer.indexOf(0x0a);
+    const lineLength = newlineIndex < 0 ? inputBuffer.length : newlineIndex;
+    if (lineLength > MAX_RPC_BODY_BYTES) {
+      inputBuffer = Buffer.alloc(0);
+      sendError(null, -32700, "MCP message line is too large");
       process.stdin.pause();
       void shutdown(1, true);
       return;
     }
-
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + length;
-    if (inputBuffer.length < bodyEnd) {
+    if (newlineIndex < 0) {
       return;
     }
 
-    const body = inputBuffer.subarray(bodyStart, bodyEnd).toString("utf8");
-    inputBuffer = inputBuffer.subarray(bodyEnd);
+    // Decode only complete lines so a chunk boundary cannot split a UTF-8 character.
+    const body = inputBuffer.subarray(0, newlineIndex).toString("utf8").trim();
+    inputBuffer = inputBuffer.subarray(newlineIndex + 1);
+    if (body === "") {
+      continue;
+    }
 
     let request;
     try {
@@ -1859,8 +1844,7 @@ function sendError(id, code, message) {
 }
 
 function sendMessage(message) {
-  const body = JSON.stringify(message);
-  process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
 function delay(milliseconds) {
