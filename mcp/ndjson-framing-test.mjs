@@ -113,7 +113,7 @@ test("stdio initialize and coalesced tools/list expose the seven standard tools"
   });
   assert.equal(messages.length, 2, "Notifications must not produce a response");
   assert.deepEqual(messages.map((message) => message.id), [1, 2]);
-  assert.deepEqual(messages[0].result.serverInfo, { name: "mineclient-bridge", version: "1.1.3" });
+  assert.deepEqual(messages[0].result.serverInfo, { name: "mineclient-bridge", version: "1.1.4" });
   assert.deepEqual(messages[1].result.tools.map((tool) => tool.name), TOOL_NAMES);
 });
 

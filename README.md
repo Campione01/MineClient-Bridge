@@ -45,7 +45,7 @@ Any local program that receives the token can operate the exposed client actions
 ## Installation
 
 1. Install NeoForge for Minecraft 1.21.1.
-2. Place `mineclient-bridge-neoforge-1.21.1-1.1.3.jar` in the client's `mods` directory.
+2. Place `mineclient-bridge-neoforge-1.21.1-1.1.4.jar` in the client's `mods` directory.
 3. Start the client. The mod creates its config and token files on first launch.
 4. Connect an authorized loopback client to `http://127.0.0.1:38121` using the generated token.
 
@@ -92,10 +92,10 @@ This is a real 960x540 framebuffer from the NeoForge 1.21.1 smoke session. The g
 
 ```powershell
 .\gradlew.bat clean build
-node .\mcp\self-test.mjs
+npm --prefix .\mcp test
 ```
 
-The release artifact is `build/libs/mineclient-bridge-neoforge-1.21.1-1.1.3.jar`.
+The release artifact is `build/libs/mineclient-bridge-neoforge-1.21.1-1.1.4.jar`.
 
 ## License And References
 
