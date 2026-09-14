@@ -115,11 +115,14 @@ async function runSelfTest() {
       "minecraft_client_input",
       "minecraft_client_close"
     ]);
+    for (const tool of listed.result.tools) {
+      assert.equal(tool.inputSchema.type, "object", `${tool.name} must declare an object input schema`);
+      for (const combinator of ["oneOf", "anyOf", "allOf"]) {
+        assert.equal(tool.inputSchema[combinator], undefined, `${tool.name} must not use a top-level ${combinator}`);
+      }
+    }
     const inputTool = listed.result.tools.find((tool) => tool.name === "minecraft_client_input");
-    const inputKinds = inputTool.inputSchema.oneOf
-      .map((schema) => schema.properties.kind.const)
-      .sort();
-    assert.deepEqual(inputKinds, [
+    assert.deepEqual([...inputTool.inputSchema.properties.kind.enum].sort(), [
       "command",
       "key",
       "look",
@@ -128,10 +131,15 @@ async function runSelfTest() {
       "release_all",
       "text"
     ]);
-    const commandSchema = inputTool.inputSchema.oneOf.find(
-      (schema) => schema.properties.kind.const === "command"
-    );
-    assert.equal(commandSchema.properties.command.maxLength, 512);
+    assert.deepEqual(inputTool.inputSchema.required, ["run_id", "kind"]);
+    assert.equal(inputTool.inputSchema.properties.command.maxLength, 512);
+    const queryTool = listed.result.tools.find((tool) => tool.name === "minecraft_client_query");
+    assert.deepEqual([...queryTool.inputSchema.properties.kind.enum].sort(), [
+      "capabilities",
+      "keymaps",
+      "screen",
+      "state"
+    ]);
 
     const commonReject = {
       run_id: `mineclient-reject-${suffix}`,
@@ -359,6 +367,23 @@ async function runSelfTest() {
       kind: "state",
       radius: 33
     }, /radius/);
+    // The schemas are flat objects, so runtime must still refuse fields from another kind.
+    await expectToolError(client, "minecraft_client_query", {
+      run_id: launchRun,
+      kind: "screen",
+      radius: 4
+    }, /exactly/);
+    await expectToolError(client, "minecraft_client_input", {
+      run_id: launchRun,
+      kind: "release_all",
+      mapping: "key.jump"
+    }, /exactly/);
+    await expectToolError(client, "minecraft_client_input", {
+      run_id: launchRun,
+      kind: "key",
+      mapping: "key.jump",
+      action: "scroll"
+    }, /action/);
 
     for (const action of ["press", "release", "tap"]) {
       allToolResponses.push(await client.callTool("minecraft_client_input", {

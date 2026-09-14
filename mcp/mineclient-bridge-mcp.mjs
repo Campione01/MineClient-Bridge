@@ -110,123 +110,74 @@ const tools = [
   {
     name: "minecraft_client_query",
     description: "Read one fixed client capability, state, screen, or keymap view after exact bridge identity revalidation.",
+    // One object schema: strict MCP clients reject a top-level oneOf, and parseQuery
+    // enforces the exact fields of each kind at runtime.
     inputSchema: {
-      oneOf: [
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { enum: ["capabilities", "screen", "keymaps"] }
-          },
-          required: ["run_id", "kind"],
-          additionalProperties: false
+      type: "object",
+      properties: {
+        run_id: { type: "string" },
+        kind: {
+          type: "string",
+          enum: ["capabilities", "screen", "keymaps", "state"],
+          description: "View to read. Only state accepts radius."
         },
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { const: "state" },
-            radius: { type: "integer", minimum: 1, maximum: 32 }
-          },
-          required: ["run_id", "kind"],
-          additionalProperties: false
+        radius: {
+          type: "integer",
+          minimum: 1,
+          maximum: 32,
+          description: "Nearby entity radius, for kind state only."
         }
-      ]
+      },
+      required: ["run_id", "kind"],
+      additionalProperties: false
     },
     annotations: { readOnlyHint: true, openWorldHint: false }
   },
   {
     name: "minecraft_client_input",
     description: "Send one bounded keymap, raw keyboard, look, mouse, text, command, or release-all action to one registered Minecraft client.",
+    // One object schema: strict MCP clients reject a top-level oneOf, and parseInput
+    // enforces the exact fields of each kind at runtime.
     inputSchema: {
-      oneOf: [
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { const: "key" },
-            mapping: { type: "string" },
-            action: { enum: ["press", "release", "tap"] }
-          },
-          required: ["run_id", "kind", "mapping", "action"],
-          additionalProperties: false
+      type: "object",
+      properties: {
+        run_id: { type: "string" },
+        kind: {
+          type: "string",
+          enum: ["key", "raw_key", "look", "mouse", "release_all", "text", "command"],
+          description:
+            "Action type. Send only the chosen kind's fields: key needs mapping and action; raw_key needs key and action; " +
+            "look needs yaw, pitch and relative; mouse needs action and takes optional x, y, button and scrollY; " +
+            "release_all takes no other field; text needs text and submit; command needs command."
         },
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { const: "raw_key" },
-            key: {
-              type: "string",
-              maxLength: 128,
-              description: "Minecraft key name or short alias, for example key.keyboard.enter, escape, or f1."
-            },
-            action: { enum: ["press", "release", "tap"] }
-          },
-          required: ["run_id", "kind", "key", "action"],
-          additionalProperties: false
+        mapping: { type: "string", description: "KeyMapping name, for kind key." },
+        key: {
+          type: "string",
+          maxLength: 128,
+          description: "Minecraft key name or short alias for kind raw_key, for example key.keyboard.enter, escape, or f1."
         },
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { const: "look" },
-            yaw: { type: "number" },
-            pitch: { type: "number" },
-            relative: { type: "boolean" }
-          },
-          required: ["run_id", "kind", "yaw", "pitch", "relative"],
-          additionalProperties: false
+        action: {
+          type: "string",
+          enum: ["press", "release", "tap", "move", "click", "scroll"],
+          description: "press, release or tap for kinds key and raw_key; move, press, release, click or scroll for kind mouse."
         },
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { const: "mouse" },
-            x: { type: "number" },
-            y: { type: "number" },
-            button: { type: "integer", minimum: 0, maximum: 7 },
-            action: { enum: ["move", "press", "release", "click", "scroll"] },
-            scrollY: { type: "number" }
-          },
-          required: ["run_id", "kind", "action"],
-          additionalProperties: false
-        },
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { const: "release_all" }
-          },
-          required: ["run_id", "kind"],
-          additionalProperties: false
-        },
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { const: "text" },
-            text: { type: "string", maxLength: 512 },
-            submit: { type: "boolean" }
-          },
-          required: ["run_id", "kind", "text", "submit"],
-          additionalProperties: false
-        },
-        {
-          type: "object",
-          properties: {
-            run_id: { type: "string" },
-            kind: { const: "command" },
-            command: {
-              type: "string",
-              maxLength: 512,
-              description: "Minecraft command with or without a leading slash."
-            }
-          },
-          required: ["run_id", "kind", "command"],
-          additionalProperties: false
+        yaw: { type: "number", description: "Yaw, for kind look." },
+        pitch: { type: "number", description: "Pitch, for kind look." },
+        relative: { type: "boolean", description: "Whether yaw and pitch are relative, for kind look." },
+        x: { type: "number", description: "GUI-scaled x, for kind mouse." },
+        y: { type: "number", description: "GUI-scaled y, for kind mouse." },
+        button: { type: "integer", minimum: 0, maximum: 7, description: "Mouse button, for kind mouse." },
+        scrollY: { type: "number", description: "Scroll amount, for kind mouse with action scroll." },
+        text: { type: "string", maxLength: 512, description: "Text to send, for kind text." },
+        submit: { type: "boolean", description: "Whether to submit the text, for kind text." },
+        command: {
+          type: "string",
+          maxLength: 512,
+          description: "Minecraft command with or without a leading slash, for kind command."
         }
-      ]
+      },
+      required: ["run_id", "kind"],
+      additionalProperties: false
     },
     annotations: { destructiveHint: true, openWorldHint: false }
   },

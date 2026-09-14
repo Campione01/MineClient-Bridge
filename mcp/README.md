@@ -42,6 +42,8 @@ PowerShell 7 (`pwsh.exe`) is recommended when a prepared launcher references non
 - `minecraft_client_input`
 - `minecraft_client_close`
 
+Every tool declares a plain object input schema with no top-level `oneOf`, `anyOf` or `allOf`, so MCP clients that validate `tools/list` strictly load all seven tools. `minecraft_client_query` and `minecraft_client_input` select their operation with `kind`, and the server rejects any field that does not belong to that kind.
+
 `minecraft_client_input` accepts these input kinds: `key`, `raw_key`, `look`, `mouse`, `text`, `command`, and `release_all`. Use `raw_key` with a Minecraft key name or short alias such as `key.keyboard.enter`, `escape`, or `f1`. Repeated raw-key presses and releases are idempotent. A tap completes an existing press or sends a new press/release pair, always ends released, and repeated taps remain independent. Named `key` taps target only the requested mapping, including unbound mappings. `mouse` supports world button actions and coordinate-free world scroll as well as GUI coordinates. Session cleanup releases every tracked raw key. Use `command` with up to 256 command characters with or without a leading slash. All paths use the authenticated in-client bridge and do not inject operating-system input.
 
 Launch roots are one-shot and must contain `final-preflight.json`, `launch.ps1`, and `launch/java-arguments.txt`. The launcher must preserve the MCP-provided `MINECLIENT_BRIDGE_*` environment variables when it starts Java. Every session is revalidated against its run ID, process ID, desktop, runtime root, evidence root, and authenticated bridge status.
