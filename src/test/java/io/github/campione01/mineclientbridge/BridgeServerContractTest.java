@@ -37,19 +37,52 @@ class BridgeServerContractTest {
         assertTrue(source.contains("obj.addProperty(\"screen_transition\", true)"));
         assertTrue(source.contains("if (HELD_WORLD_MOUSE_BUTTONS.add(button))"));
         assertTrue(source.contains("dispatchWorldMouseButton(mc, button, GLFW.GLFW_PRESS)"));
-        assertTrue(source.contains("case \"up\", \"release\" -> releaseHeldWorldMouseButton(mc, button)"));
+        assertTrue(source.contains("case \"up\", \"release\" -> {"));
+        assertTrue(source.contains("if (releaseHeldWorldMouseButton(mc, button, observed))"));
         assertTrue(source.contains("for (int button : worldMouseButtons)"));
-        assertTrue(source.contains("releaseHeldWorldMouseButton(mc, button);"));
+        assertTrue(source.contains("releaseHeldWorldMouseButton(mc, button, new ArrayList<>());"));
         assertTrue(source.contains("dispatchWorldMouseButton(mc, button, GLFW.GLFW_RELEASE)"));
         assertTrue(source.contains("mc.mouseHandler.isLeftPressed = false"));
         assertTrue(source.contains("mc.mouseHandler.isRightPressed = false"));
         assertTrue(source.contains("mc.mouseHandler.isMiddlePressed = false"));
         assertTrue(source.contains("KeyMapping.resetMapping()"));
         assertTrue(source.contains("world_move_requires_look"));
+
+        // Every synthetic action reaches the game through the same client handler a device drives,
+        // so the NeoForge input events mods listen on are published exactly as they would be.
+        assertTrue(source.contains("mc.mouseHandler.onPress("));
+        assertTrue(source.contains("case MOUSE -> applyMouseAction(Double.NaN, Double.NaN, boundKey.getValue()"));
+        assertTrue(source.contains(": applyRawKeyForKey(mc, boundKey, action)"));
+        assertTrue(source.contains("exact ? borrowKeyForMapping(mc, selected, action)"));
+        assertTrue(source.contains("optionalBoolean(body, \"exact\", false)"));
+        assertTrue(source.contains("mouse_mapping_requires_no_screen"));
+        assertTrue(source.contains("borrowed_key_hold_unsupported"));
+        assertTrue(source.contains("InputEventProbe.mouseButtonSince("));
+        assertTrue(source.contains("InputEventProbe.keySince("));
+        assertTrue(source.contains("InputEventProbe.scrollSince("));
+        assertFalse(source.contains("KeyMapping.click("));
+        assertFalse(source.contains("ensureWorldInputFocus"));
         assertFalse(source.contains("command_submission_forbidden"));
         assertFalse(source.contains("control_arbitrary_commands"));
         assertFalse(source.contains("mapping_unbound"));
         assertFalse(source.contains("createContext(\"/" + "chat\""));
+
+        String probe = Files.readString(project.resolve(
+                "src/main/java/io/github/campione01/mineclientbridge/InputEventProbe.java"));
+        assertTrue(probe.contains("InputEvent.MouseButton.Pre.class"));
+        assertTrue(probe.contains("InputEvent.Key.class"));
+        assertTrue(probe.contains("InputEvent.InteractionKeyMappingTriggered.class"));
+
+        assertTrue(probe.contains("InputEvent.MouseScrollingEvent.class"));
+        assertEquals(4, occurrences(probe, "EventPriority.LOWEST, true,"));
+
+        // The mouse grab is bypassed for isolated sessions in grabMouse alone, so window focus keeps
+        // its normal meaning everywhere else and the native cursor is still never captured.
+        String mouseMixin = Files.readString(project.resolve(
+                "src/main/java/io/github/campione01/mineclientbridge/mixin/MouseHandlerMixin.java"));
+        assertTrue(mouseMixin.contains("method = \"grabMouse()V\""));
+        assertTrue(mouseMixin.contains("minecraft.isWindowActive() || ClientInputIsolation.enabled()"));
+        assertEquals(1, occurrences(mouseMixin, "ClientInputIsolation.enabled()"));
 
         String accessTransformer = Files.readString(project.resolve(
                 "src/main/resources/META-INF/accesstransformer.cfg"));

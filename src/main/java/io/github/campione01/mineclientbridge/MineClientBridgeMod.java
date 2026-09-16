@@ -11,6 +11,7 @@ public final class MineClientBridgeMod {
     public static final Logger LOGGER = BridgeLog.LOGGER;
 
     public MineClientBridgeMod(IEventBus modEventBus) {
+        InputEventProbe.install();
         BridgeServer.start();
         Runtime.getRuntime().addShutdownHook(new Thread(
                 BridgeServer::stop,

@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.PriorityQueue;
 import java.util.concurrent.Callable;
@@ -279,9 +280,11 @@ public final class BridgeServer {
 
         final String mapping;
         final String action;
+        final boolean exact;
         try {
             mapping = requiredString(body, "mapping");
             action = requiredString(body, "action").trim().toLowerCase(Locale.ROOT);
+            exact = optionalBoolean(body, "exact", false);
             if (mapping.isBlank()) {
                 throw new RequestException(400, "invalid_mapping", "mapping must not be blank");
             }
@@ -295,7 +298,7 @@ public final class BridgeServer {
 
         try {
             EndpointResult result = callOnMinecraftThread(
-                    () -> applyKeyAction(mapping, action),
+                    () -> applyKeyAction(mapping, action, exact),
                     MINECRAFT_TIMEOUT_SECONDS);
             respondJson(exchange, result.status(), result.body());
         } catch (Exception e) {
@@ -541,6 +544,8 @@ public final class BridgeServer {
         safety.addProperty("bearer_required", true);
         safety.addProperty("authenticated_minecraft_commands", true);
         safety.addProperty("internal_keyboard_events", true);
+        safety.addProperty("internal_mouse_events", true);
+        safety.addProperty("mod_input_events_observed", InputEventProbe.installed());
         safety.addProperty("arbitrary_scripts", false);
         safety.addProperty("direct_file_api", false);
         safety.addProperty("direct_outbound_network_api", false);
@@ -950,6 +955,18 @@ public final class BridgeServer {
         window.addProperty("active", mc.isWindowActive());
         obj.add("window", window);
 
+        JsonObject pointer = new JsonObject();
+        pointer.addProperty("grabbed", mc.mouseHandler.isMouseGrabbed());
+        pointer.addProperty("left_pressed", mc.mouseHandler.isLeftPressed());
+        pointer.addProperty("right_pressed", mc.mouseHandler.isRightPressed());
+        pointer.addProperty("middle_pressed", mc.mouseHandler.isMiddlePressed());
+        JsonArray heldButtons = new JsonArray();
+        for (int button : HELD_WORLD_MOUSE_BUTTONS) {
+            heldButtons.add(button);
+        }
+        pointer.add("held_world_buttons", heldButtons);
+        obj.add("mouse", pointer);
+
         JsonArray heldMappings = new JsonArray();
         for (KeyMapping mapping : mc.options.keyMappings) {
             if (mapping.isDown()) {
@@ -972,7 +989,42 @@ public final class BridgeServer {
         isolation.addProperty("virtual_clipboard_writes", isolationStats.virtualClipboardWrites());
         isolation.addProperty("held_keys", isolationStats.heldKeys());
         obj.add("input_isolation", isolation);
+
+        InputEventProbe.Statistics probeStats = InputEventProbe.statistics();
+        JsonObject probe = new JsonObject();
+        probe.addProperty("installed", probeStats.installed());
+        probe.addProperty("mouse_button_events", probeStats.mouseButtonEvents());
+        probe.addProperty("mouse_button_events_cancelled_by_mods", probeStats.mouseButtonEventsCancelled());
+        probe.addProperty("key_events", probeStats.keyEvents());
+        probe.addProperty("scroll_events", probeStats.scrollEvents());
+        probe.addProperty("scroll_events_cancelled_by_mods", probeStats.scrollEventsCancelled());
+        probe.addProperty("interaction_events", probeStats.interactionEvents());
+        probe.addProperty("interaction_events_cancelled_by_mods", probeStats.interactionEventsCancelled());
+        addObservation(probe, "last_mouse_button", probeStats.lastMouseButton());
+        addObservation(probe, "last_key", probeStats.lastKey());
+        addObservation(probe, "last_scroll", probeStats.lastScroll());
+        addObservation(probe, "last_interaction", probeStats.lastInteraction());
+        obj.add("mod_input_events", probe);
         return obj;
+    }
+
+    private static void addObservation(JsonObject parent, String name, InputEventProbe.Observation observation) {
+        if (observation == null) {
+            return;
+        }
+        JsonObject entry = new JsonObject();
+        entry.addProperty("device", observation.device());
+        if (observation.code() >= 0) {
+            entry.addProperty("code", observation.code());
+        }
+        if (observation.action() >= 0) {
+            entry.addProperty("action", observation.action());
+        }
+        entry.addProperty("cancelled_by_mod", observation.cancelled());
+        if (!observation.mapping().isEmpty()) {
+            entry.addProperty("mapping", observation.mapping());
+        }
+        parent.add(name, entry);
     }
 
     private static byte[] captureFrame() throws IOException {
@@ -990,7 +1042,7 @@ public final class BridgeServer {
         }
     }
 
-    private static EndpointResult applyKeyAction(String mappingName, String action) {
+    private static EndpointResult applyKeyAction(String mappingName, String action, boolean exact) {
         Minecraft mc = Minecraft.getInstance();
         KeyMapping selected = null;
         for (KeyMapping mapping : mc.options.keyMappings) {
@@ -1003,45 +1055,76 @@ public final class BridgeServer {
         if (selected == null) {
             return new EndpointResult(404, error("mapping_not_found", "No exact KeyMapping.getName() match"));
         }
-        switch (action) {
-            case "down" -> selected.setDown(true);
-            case "up" -> selected.setDown(false);
-            case "click" -> {
-                if (!clickMappingExactly(mc, selected)) {
-                    return new EndpointResult(409, error(
-                            "no_temporary_mapping_key",
-                            "No unused keyboard key is available for an exact mapping click"));
-                }
-            }
-            default -> throw new IllegalArgumentException("Unsupported key action: " + action);
-        }
 
-        JsonObject obj = ok();
+        // A mapping is only a name for the key the player would press. Drive that key through the
+        // same client handler a real device drives, so KeyMapping bookkeeping and the NeoForge
+        // input events both happen exactly as they do for a physical press.
+        InputConstants.Key boundKey = selected.getKey();
+        if (!exact && boundKey.getType() == InputConstants.Type.MOUSE && mc.screen != null) {
+            // The screen route clicks whatever the virtual pointer sits on rather than publishing a
+            // button event, so it would press a random widget instead of activating the mapping.
+            return new EndpointResult(409, error(
+                    "mouse_mapping_requires_no_screen",
+                    "This mapping is bound to a mouse button. Close the screen, or use kind mouse "
+                            + "with x and y for a GUI click, or exact for the mapping alone"));
+        }
+        EndpointResult delivered = exact ? borrowKeyForMapping(mc, selected, action) : switch (boundKey.getType()) {
+            case MOUSE -> applyMouseAction(Double.NaN, Double.NaN, boundKey.getValue(), action, 0.0);
+            case KEYSYM -> boundKey.getValue() < 0
+                    ? borrowKeyForMapping(mc, selected, action)
+                    : applyRawKeyForKey(mc, boundKey, action);
+            default -> borrowKeyForMapping(mc, selected, action);
+        };
+
+        JsonObject obj = delivered.body().deepCopy();
         obj.addProperty("mapping", selected.getName());
         obj.addProperty("action", action);
         obj.addProperty("key", selected.saveString());
-        obj.addProperty("down", selected.isDown());
-        return new EndpointResult(200, obj);
+        obj.addProperty("key_type", boundKey.getType().name().toLowerCase(Locale.ROOT));
+        obj.addProperty("exact", exact);
+        obj.addProperty("mapping_down", selected.isDown());
+        return new EndpointResult(delivered.status(), obj);
     }
 
-    private static boolean clickMappingExactly(Minecraft mc, KeyMapping selected) {
+    /**
+     * Borrows a spare keyboard key for the length of one real keyboard event and gives it straight
+     * back. This is how an unbound mapping is driven at all, and how an exact request activates only
+     * the mapping it names instead of every mapping that shares the same physical key.
+     */
+    private static EndpointResult borrowKeyForMapping(Minecraft mc, KeyMapping selected, String action) {
         InputConstants.Key temporaryKey = findUnusedKeyboardKey(mc);
         if (temporaryKey == null) {
-            return false;
+            return new EndpointResult(409, error(
+                    "no_temporary_mapping_key",
+                    "No unused keyboard key is available for an exact mapping click"));
+        }
+        if (!action.equals("click")) {
+            // The mapping is only bound to the borrowed key for the length of one event, so a hold
+            // cannot be delivered this way. Setting the mapping down by hand instead would publish
+            // no event at all, which is the gap this route exists to close, so refuse it plainly.
+            return new EndpointResult(409, error(
+                    "borrowed_key_hold_unsupported",
+                    "Only a click can be delivered for an unbound or exact mapping. Bind the mapping "
+                            + "to a key, or use kind raw_key or mouse to hold that key"));
         }
 
         InputConstants.Key originalKey = selected.getKey();
         selected.setKey(temporaryKey);
         KeyMapping.resetMapping();
         try {
-            selected.setDown(true);
-            KeyMapping.click(temporaryKey);
+            EndpointResult borrowed = applyRawKeyForKey(mc, temporaryKey, "click");
+            // The borrowed key is an implementation detail; do not report it as the mapping's key.
+            JsonObject obj = borrowed.body().deepCopy();
+            obj.remove("key");
+            obj.addProperty("borrowed_key", temporaryKey.getName());
+            obj.addProperty("borrowed_key_code", obj.remove("key_code").getAsInt());
+            return new EndpointResult(borrowed.status(), obj);
         } finally {
-            selected.setDown(false);
+            // The release dispatched above already cleared the mapping through KeyMapping.set,
+            // so nothing here may touch its down state: it could belong to another held input.
             selected.setKey(originalKey);
             KeyMapping.resetMapping();
         }
-        return true;
     }
 
     private static InputConstants.Key findUnusedKeyboardKey(Minecraft mc) {
@@ -1068,25 +1151,28 @@ public final class BridgeServer {
         } catch (IllegalArgumentException e) {
             return new EndpointResult(400, error("invalid_key", e.getMessage()));
         }
+        return applyRawKeyForKey(Minecraft.getInstance(), key, action);
+    }
 
-        Minecraft mc = Minecraft.getInstance();
+    private static EndpointResult applyRawKeyForKey(Minecraft mc, InputConstants.Key key, String action) {
         if (!mc.isSameThread()) {
             throw new IllegalStateException("Raw key input must run on the Minecraft thread");
         }
         long window = mc.getWindow().getWindow();
         boolean wasDown = HELD_RAW_KEYS.contains(key);
+        ArrayList<InputEventProbe.Observation> observed = new ArrayList<>();
         int events = 0;
         switch (action) {
             case "down" -> {
                 if (!wasDown) {
                     HELD_RAW_KEYS.add(key);
-                    dispatchRawKeyboard(mc, window, key, InputConstants.PRESS);
+                    addObserved(observed, dispatchRawKeyboard(mc, window, key, InputConstants.PRESS));
                     events = 1;
                 }
             }
             case "up" -> {
                 if (wasDown) {
-                    dispatchRawKeyboard(mc, window, key, InputConstants.RELEASE);
+                    addObserved(observed, dispatchRawKeyboard(mc, window, key, InputConstants.RELEASE));
                     HELD_RAW_KEYS.remove(key);
                     events = 1;
                 }
@@ -1094,10 +1180,10 @@ public final class BridgeServer {
             case "click" -> {
                 if (!wasDown) {
                     HELD_RAW_KEYS.add(key);
-                    dispatchRawKeyboard(mc, window, key, InputConstants.PRESS);
+                    addObserved(observed, dispatchRawKeyboard(mc, window, key, InputConstants.PRESS));
                     events++;
                 }
-                dispatchRawKeyboard(mc, window, key, InputConstants.RELEASE);
+                addObserved(observed, dispatchRawKeyboard(mc, window, key, InputConstants.RELEASE));
                 HELD_RAW_KEYS.remove(key);
                 events++;
             }
@@ -1111,12 +1197,47 @@ public final class BridgeServer {
         obj.addProperty("was_down", wasDown);
         obj.addProperty("down", HELD_RAW_KEYS.contains(key));
         obj.addProperty("events", events);
+        addEventDelivery(obj, observed);
         return new EndpointResult(200, obj);
     }
 
-    private static void dispatchRawKeyboard(Minecraft mc, long window, InputConstants.Key key, int action) {
+    private static InputEventProbe.Observation dispatchRawKeyboard(
+            Minecraft mc, long window, InputConstants.Key key, int action) {
         ClientInputIsolation.setKeyDown(key.getValue(), action != InputConstants.RELEASE);
+        long probeSequence = InputEventProbe.keySequence();
         mc.keyboardHandler.keyPress(window, key.getValue(), -1, action, ClientInputIsolation.modifiers());
+        return InputEventProbe.keySince(probeSequence, key.getValue(), action);
+    }
+
+    /**
+     * Reports what a dispatch published. A press and its release are separate events and a mod may
+     * cancel either, so each is listed; {@code event_cancelled_by_mod} is true when a mod cancelled
+     * any of them. {@code event_fired} false does not always mean the input was lost: a screen that
+     * consumes a key returns before Minecraft publishes the event, exactly as it does for a device.
+     */
+    private static void addEventDelivery(JsonObject obj, List<InputEventProbe.Observation> observations) {
+        JsonObject delivery = new JsonObject();
+        delivery.addProperty("probe_installed", InputEventProbe.installed());
+        delivery.addProperty("event_fired", !observations.isEmpty());
+        boolean cancelled = false;
+        JsonArray events = new JsonArray();
+        for (InputEventProbe.Observation observation : observations) {
+            cancelled |= observation.cancelled();
+            JsonObject entry = new JsonObject();
+            entry.addProperty("action", observation.action());
+            entry.addProperty("cancelled_by_mod", observation.cancelled());
+            events.add(entry);
+        }
+        delivery.addProperty("event_cancelled_by_mod", cancelled);
+        delivery.add("events", events);
+        obj.add("mod_input_event", delivery);
+    }
+
+    private static void addObserved(
+            List<InputEventProbe.Observation> observations, InputEventProbe.Observation observation) {
+        if (observation != null) {
+            observations.add(observation);
+        }
     }
 
     private static InputConstants.Key resolveKeyboardKey(String input) {
@@ -1192,7 +1313,8 @@ public final class BridgeServer {
 
         if (HELD_WORLD_MOUSE_BUTTONS.contains(button)
                 && (action.equals("up") || action.equals("release") || action.equals("click"))) {
-            releaseHeldWorldMouseButton(mc, button);
+            ArrayList<InputEventProbe.Observation> observed = new ArrayList<>();
+            releaseHeldWorldMouseButton(mc, button, observed);
             JsonObject obj = ok();
             obj.addProperty("screen", currentScreen.getClass().getName());
             obj.addProperty("action", action);
@@ -1201,6 +1323,7 @@ public final class BridgeServer {
             obj.addProperty("handled", true);
             obj.addProperty("screen_transition", true);
             obj.addProperty("down", false);
+            addEventDelivery(obj, observed);
             return new EndpointResult(200, obj);
         }
 
@@ -1257,9 +1380,15 @@ public final class BridgeServer {
                     "Use /control/look for world camera movement"));
         }
 
+        boolean wasDown = HELD_WORLD_MOUSE_BUTTONS.contains(button);
+        ArrayList<InputEventProbe.Observation> observed = new ArrayList<>();
+        int events = 0;
         boolean handled;
         if (action.equals("scroll")) {
+            long probeSequence = InputEventProbe.scrollSequence();
             handled = ClientHooks.onMouseScroll(mc.mouseHandler, 0.0, scrollY);
+            addObserved(observed, InputEventProbe.scrollSince(probeSequence));
+            events = 1;
             if (!handled) {
                 mc.player.getInventory().swapPaint(scrollY);
                 handled = true;
@@ -1268,18 +1397,26 @@ public final class BridgeServer {
             switch (action) {
                 case "down" -> {
                     if (HELD_WORLD_MOUSE_BUTTONS.add(button)) {
-                        dispatchWorldMouseButton(mc, button, GLFW.GLFW_PRESS);
+                        addObserved(observed, dispatchWorldMouseButton(mc, button, GLFW.GLFW_PRESS));
+                        events = 1;
                     }
                 }
-                case "up", "release" -> releaseHeldWorldMouseButton(mc, button);
+                case "up", "release" -> {
+                    if (releaseHeldWorldMouseButton(mc, button, observed)) {
+                        events = 1;
+                    }
+                }
                 case "click" -> {
                     if (HELD_WORLD_MOUSE_BUTTONS.contains(button)) {
-                        releaseHeldWorldMouseButton(mc, button);
+                        releaseHeldWorldMouseButton(mc, button, observed);
+                        events = 1;
                     } else {
                         try {
-                            dispatchWorldMouseButton(mc, button, GLFW.GLFW_PRESS);
+                            addObserved(observed, dispatchWorldMouseButton(mc, button, GLFW.GLFW_PRESS));
+                            events++;
                         } finally {
-                            releaseWorldMouseButton(mc, button);
+                            releaseWorldMouseButton(mc, button, observed);
+                            events++;
                         }
                     }
                 }
@@ -1294,23 +1431,33 @@ public final class BridgeServer {
         obj.addProperty("button", button);
         obj.addProperty("scroll_y", scrollY);
         obj.addProperty("handled", handled);
+        obj.addProperty("was_down", wasDown);
         obj.addProperty("down", HELD_WORLD_MOUSE_BUTTONS.contains(button));
+        obj.addProperty("events", events);
+        obj.addProperty("mouse_grabbed", mc.mouseHandler.isMouseGrabbed());
+        addEventDelivery(obj, observed);
         return new EndpointResult(200, obj);
     }
 
-    private static void dispatchWorldMouseButton(Minecraft mc, int button, int action) {
+    private static InputEventProbe.Observation dispatchWorldMouseButton(Minecraft mc, int button, int action) {
+        long probeSequence = InputEventProbe.mouseButtonSequence();
         mc.mouseHandler.onPress(mc.getWindow().getWindow(), button, action, ClientInputIsolation.modifiers());
+        return InputEventProbe.mouseButtonSince(probeSequence, button, action);
     }
 
-    private static void releaseHeldWorldMouseButton(Minecraft mc, int button) {
+    private static boolean releaseHeldWorldMouseButton(
+            Minecraft mc, int button, List<InputEventProbe.Observation> observed) {
         if (HELD_WORLD_MOUSE_BUTTONS.remove(button)) {
-            releaseWorldMouseButton(mc, button);
+            releaseWorldMouseButton(mc, button, observed);
+            return true;
         }
+        return false;
     }
 
-    private static void releaseWorldMouseButton(Minecraft mc, int button) {
+    private static void releaseWorldMouseButton(
+            Minecraft mc, int button, List<InputEventProbe.Observation> observed) {
         try {
-            dispatchWorldMouseButton(mc, button, GLFW.GLFW_RELEASE);
+            addObserved(observed, dispatchWorldMouseButton(mc, button, GLFW.GLFW_RELEASE));
         } finally {
             KeyMapping.set(InputConstants.Type.MOUSE.getOrCreate(button), false);
             if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
@@ -1794,7 +1941,7 @@ public final class BridgeServer {
         ArrayList<Integer> worldMouseButtons = new ArrayList<>(HELD_WORLD_MOUSE_BUTTONS);
         for (int button : worldMouseButtons) {
             try {
-                releaseHeldWorldMouseButton(mc, button);
+                releaseHeldWorldMouseButton(mc, button, new ArrayList<>());
             } catch (RuntimeException e) {
                 if (failure == null) {
                     failure = e;

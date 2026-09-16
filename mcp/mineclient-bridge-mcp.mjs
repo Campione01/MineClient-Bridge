@@ -146,11 +146,19 @@ const tools = [
           type: "string",
           enum: ["key", "raw_key", "look", "mouse", "release_all", "text", "command"],
           description:
-            "Action type. Send only the chosen kind's fields: key needs mapping and action; raw_key needs key and action; " +
+            "Action type. Send only the chosen kind's fields: key needs mapping and action and takes optional exact; " +
+            "raw_key needs key and action; " +
             "look needs yaw, pitch and relative; mouse needs action and takes optional x, y, button and scrollY; " +
             "release_all takes no other field; text needs text and submit; command needs command."
         },
         mapping: { type: "string", description: "KeyMapping name, for kind key." },
+        exact: {
+          type: "boolean",
+          description:
+            "For kind key only. false (default) presses the mapping's own bound key, so mods see the " +
+            "same input events as a real device and every mapping sharing that key reacts. true borrows " +
+            "an unused key so only the named mapping reacts."
+        },
         key: {
           type: "string",
           maxLength: 128,
@@ -639,19 +647,26 @@ function parseInput(args) {
 
   switch (args.kind) {
     case "key": {
-      assertExactKeys(args, ["run_id", "kind", "mapping", "action"]);
+      assertAllowedKeys(args, ["run_id", "kind", "mapping", "action", "exact"]);
+      for (const required of ["run_id", "kind", "mapping", "action"]) {
+        if (!(required in args)) {
+          throw new Error(`key input is missing ${required}`);
+        }
+      }
       const mapping = validateBoundedString(args.mapping, "mapping", 256);
       const actionMap = { press: "down", release: "up", tap: "click" };
       const wireAction = actionMap[args.action];
       if (!wireAction) {
         throw new Error("key action must be press, release, or tap");
       }
-      return {
-        runId,
-        kind: "key",
-        endpoint: "/control/key",
-        body: { mapping, action: wireAction }
-      };
+      const body = { mapping, action: wireAction };
+      if ("exact" in args) {
+        if (typeof args.exact !== "boolean") {
+          throw new Error("exact must be a boolean");
+        }
+        body.exact = args.exact;
+      }
+      return { runId, kind: "key", endpoint: "/control/key", body };
     }
     case "raw_key": {
       assertExactKeys(args, ["run_id", "kind", "key", "action"]);
