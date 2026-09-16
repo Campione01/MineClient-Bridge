@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 
 const SERVER_NAME = "mineclient-bridge";
-const SERVER_VERSION = "1.1.4";
+const SERVER_VERSION = "1.1.5";
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PREPARED_ROOT_PARENT = path.win32.join(
   fsSync.realpathSync.native(os.tmpdir()),

@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "release": "1.1.5",
+  "minecraft": "1.21.1",
+  "neoforge": "21.1.197",
+  "artifact_sha256": "DC1C420A0C1CCE18026984AB49C58F4E7034409F5430FA2ED623AC16B48CFACE",
+  "run_id": "claude-rel115-20260916T113642Z",
+  "process_id": 29208,
+  "identity_verified": true,
+  "isolated_input": true,
+  "gameplay_mod_under_test": "Ripples of the Past (unofficial NeoForge 1.21.1 port)",
+  "reported_symptom": "synthetic mouse input accepted but no melee behaviour observable",
+  "diagnosis": "Mouse delivery was never broken. InputEvent.MouseButton.Pre was published for every synthetic press; with a Stand summoned, the mod cancels it on purpose and suppresses the vanilla attack. Nothing in the bridge reported that, so a consumed input was indistinguishable from a lost one.",
+  "baseline_1_1_4": {
+    "run_id": "claude-ab114real-20260916T112509Z",
+    "process_id": 46204,
+    "artifact_sha256": "2DB56B1D727185456BBFBF9A9CA72BF81948F2E27F1F10F02FD1B40601AEEA25",
+    "block_break_by_held_left_click": true,
+    "broke_after_seconds": 3.22,
+    "note": "Same test as below on the released 1.1.4 jar, proving the mouse path already reached gameplay. mod_input_events is absent from 1.1.4 status, which is the reporting gap 1.1.5 closes."
+  },
+  "block_break": {
+    "gamemode": "survival",
+    "block": "minecraft:oak_planks",
+    "position": [
+      60,
+      -59,
+      2
+    ],
+    "input": "world mouse button 0, press held then released",
+    "mouse_button_pre_fired": true,
+    "cancelled_by_mod": false,
+    "broke_after_seconds": 3.23
+  },
+  "rotp_punch": {
+    "stand": "jojo_ripples:star_platinum",
+    "stand_entity_present": "jojo_ripples:humanoid_stand",
+    "input": "world mouse button 0, press then release",
+    "mouse_button_pre_fired": true,
+    "cancelled_by_mod_on_press": true,
+    "observed": "Stand lunges into a punch and the left-mouse ability slot highlights in the ROTP power HUD"
+  },
+  "named_mapping_routing": {
+    "key.attack_tap": {
+      "key_type": "mouse",
+      "exact": false,
+      "events": 2,
+      "mod_input_event": {
+        "event_fired": true,
+        "event_cancelled_by_mod": true,
+        "events": [
+          {
+            "action": 1,
+            "cancelled_by_mod": true
+          },
+          {
+            "action": 0,
+            "cancelled_by_mod": false
+          }
+        ]
+      }
+    },
+    "key.attack_tap_exact": {
+      "key_type": "mouse",
+      "exact": true,
+      "mouse_button_events": 0,
+      "key_events": 2,
+      "note": "borrowed key, only key.attack reacts"
+    },
+    "key.inventory_tap": {
+      "key_type": "keysym",
+      "key_events": 2,
+      "screen_opened": "net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen"
+    },
+    "jojo_ripples.key.meditation_tap": {
+      "key_type": "keysym",
+      "unbound": true,
+      "key_events": 2
+    }
+  },
+  "refusals": {
+    "exact_or_unbound_hold": "HTTP 409 borrowed_key_hold_unsupported",
+    "mouse_mapping_with_screen_open": "HTTP 409 mouse_mapping_requires_no_screen"
+  },
+  "world_scroll_reports_event": true,
+  "mouse_grabbed": true,
+  "release_all_verified": true,
+  "held_world_buttons_after_release": 0,
+  "held_mappings_after_release": 0,
+  "artifact_note": "Built from a clean clone, which is the artifact published to GitHub and CurseForge."
+}

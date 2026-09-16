@@ -31,6 +31,10 @@ Use `status -> frame -> input -> frame` instead of fixed sleeps. For held action
 
 Use `kind: command` for explicit Minecraft commands. The command may include or omit its leading slash. Use `kind: raw_key` for internal keyboard events that are not represented by a named `KeyMapping`, such as `enter`, `escape`, or `f1`. Raw keys go through the target client's `KeyboardHandler`, not operating-system input.
 
+`kind: key` drives the mapping's own bound key through that device's handler, so a gameplay mod that reads its controls from `InputEvent.Key` or `InputEvent.MouseButton` responds, and every mapping sharing that key reacts just as it would for the player. Pass `exact: true` to activate only the named mapping instead.
+
+Key, raw-key and world-mouse replies carry `mod_input_event`, and `status` carries `mouse` and `mod_input_events`. `event_cancelled_by_mod: true` records that a mod consumed that input on purpose, which is a different outcome from input that was never delivered; do not report the first as a delivery failure. `event_fired: false` is not proof of the second either: a screen that consumes a key returns before Minecraft publishes the event, exactly as it does for a device. The screen-scope `mouse`, `look`, `text`, `command` and `release_all` routes drive no device handler and carry no `mod_input_event`.
+
 MCP observation is request/response, not a continuous video stream. Motion-dependent tests may request successive frames or retain a short client-owned framebuffer recording.
 
 ## Evidence Boundary
