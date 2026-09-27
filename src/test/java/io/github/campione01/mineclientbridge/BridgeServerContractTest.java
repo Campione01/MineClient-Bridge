@@ -51,6 +51,9 @@ class BridgeServerContractTest {
         // Every synthetic action reaches the game through the same client handler a device drives,
         // so the NeoForge input events mods listen on are published exactly as they would be.
         assertTrue(source.contains("mc.mouseHandler.onPress("));
+        assertTrue(source.contains("mc.mouseHandler.onMove(mc.getWindow().getWindow(),"));
+        assertTrue(source.contains("screenX * mc.getWindow().getScreenWidth() / currentScreen.width"));
+        assertTrue(source.contains("screenY * mc.getWindow().getScreenHeight() / currentScreen.height"));
         assertTrue(source.contains("case MOUSE -> applyMouseAction(Double.NaN, Double.NaN, boundKey.getValue()"));
         assertTrue(source.contains(": applyRawKeyForKey(mc, boundKey, action)"));
         assertTrue(source.contains("exact ? borrowKeyForMapping(mc, selected, action)"));
@@ -87,6 +90,7 @@ class BridgeServerContractTest {
         String accessTransformer = Files.readString(project.resolve(
                 "src/main/resources/META-INF/accesstransformer.cfg"));
         assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler onPress(JIII)V"));
+        assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler onMove(JDD)V"));
         assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler isLeftPressed"));
         assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler isRightPressed"));
         assertTrue(accessTransformer.contains("public net.minecraft.client.MouseHandler isMiddlePressed"));

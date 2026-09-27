@@ -1333,6 +1333,10 @@ public final class BridgeServer {
         double screenY = Double.isNaN(y)
                 ? mc.mouseHandler.ypos() * currentScreen.height / mc.getWindow().getScreenHeight()
                 : y;
+        // GUI rendering reads MouseHandler's Java-side position, not the mouseMoved event alone.
+        mc.mouseHandler.onMove(mc.getWindow().getWindow(),
+                screenX * mc.getWindow().getScreenWidth() / currentScreen.width,
+                screenY * mc.getWindow().getScreenHeight() / currentScreen.height);
         currentScreen.mouseMoved(screenX, screenY);
         boolean handled = false;
         boolean pressed = false;
